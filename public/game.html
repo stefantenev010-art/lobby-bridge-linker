@@ -36,8 +36,8 @@
                 state.isHost = isHost;
                 state.phase = 'lobby';
 
-                // Generate ID
-                this.myId = Math.random().toString(36).substr(2, 9);
+                // Use existing ID from launch data if available, otherwise generate
+                this.myId = state.myId || Math.random().toString(36).substr(2, 9);
                 state.myId = this.myId;
 
                 if (isHost) {
