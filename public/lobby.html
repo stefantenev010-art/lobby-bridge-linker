@@ -837,21 +837,10 @@
 
     // --- INTEGRATION: The Launch Bridge ---
     window.launchKrusaderGame = function(roomData, isHost, userProfile, rCode) {
-        // 1. Hide React UI, Show Game UI
-        document.getElementById('root').style.display = 'none';
-        document.getElementById('game-container').style.display = 'block';
-
-        // 2. Hydrate Game State
-        state.isMultiplayer = true;
-        state.isHost = isHost;
-        state.roomCode = rCode;
-        state.myId = userProfile.id;
-        state.playerName = userProfile.name;
-        state.playerColor = userProfile.color;
-
-        // Populate Custom AI Questions if they exist
+        // Prepare questions for game format
+        let gameQuestions = null;
         if (roomData.questions && roomData.questions.length > 0) {
-            state.questions = roomData.questions.map((q, i) => {
+            gameQuestions = roomData.questions.map((q, i) => {
                 let correctIdx = q.options.indexOf(q.correctAnswer);
                 if (correctIdx === -1) correctIdx = 0;
                 return {
@@ -865,8 +854,8 @@
             });
         }
 
-        // Map Supabase lobby players directly to socket playersPending
-        state.playersPending = roomData.players.map((p, i) => ({
+        // Map Supabase lobby players to game format
+        const playersPending = roomData.players.map((p, i) => ({
             id: p.uid,
             name: p.name,
             color: p.color,
@@ -876,14 +865,22 @@
             eliminated: false
         }));
 
-        // 3. Init 3D World (Only once)
-        if (!window.gameInitialized) {
-            init();
-            window.gameInitialized = true;
-        }
+        // Save game launch data to localStorage for game.html to read
+        const launchData = {
+            isMultiplayer: true,
+            isHost: isHost,
+            roomCode: rCode,
+            myId: userProfile.id,
+            playerName: userProfile.name,
+            playerColor: userProfile.color,
+            playersPending: playersPending,
+            questions: gameQuestions,
+            timestamp: Date.now()
+        };
+        localStorage.setItem('krusader-launch-data', JSON.stringify(launchData));
 
-        // 4. Init Socket Connection
-        network.init(isHost, rCode, userProfile.id);
+        // Redirect to the game page
+        window.location.href = '/game.html';
     };
 
 </script>
