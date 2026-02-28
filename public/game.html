@@ -1,0 +1,3569 @@
+<!DOCTYPE html>
+<html lang="bg">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Triviador 3D - Kingdom Mode</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- Global Scripts (Non-Module) -->
+    <style>
+        /* Medieval Font Update */
+        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&display=swap');
+    </style>
+    <script>
+        // Native WebRTC NetworkManager with Custom PHP Signaling
+        // Socket.IO NetworkManager
+        class NetworkManager {
+            constructor() {
+                this.isHost = false;
+                this.myId = null;
+                this.roomCode = null;
+                this.socket = null;
+            }
+
+            init(isHost, roomCode = null) {
+                state.isMultiplayer = true;
+                this.isHost = isHost;
+                state.isHost = isHost;
+                state.phase = 'lobby';
+
+                // Generate ID
+                this.myId = Math.random().toString(36).substr(2, 9);
+                state.myId = this.myId;
+
+                if (isHost) {
+                    this.roomCode = roomCode || Math.floor(100000 + Math.random() * 900000).toString();
+                } else {
+                    this.roomCode = roomCode;
+                }
+
+                state.roomCode = this.roomCode;
+
+                if (!state.playerName) state.playerName = isHost ? 'Крал / Хост' : 'Войн';
+                state.networkStatus = 'connecting';
+
+                console.log("Connecting to backend via HTTPS (Polling/WebSocket)...");
+
+                const socketOptions = {
+                    transports: ['polling', 'websocket'],
+                    secure: true,
+                    reconnection: true,
+                    reconnectionAttempts: 5,
+                    path: '/socket.io/'
+                };
+
+                this.socket = io('https://minder.top', socketOptions);
+
+                this.socket.on("connect", () => {
+                    console.log("Connected to game server");
+                    state.networkStatus = 'connected';
+
+                    this.socket.emit("join_room", this.roomCode);
+
+                    if (this.isHost) {
+                        console.log('Host created room:', this.roomCode);
+                        if (state.playersPending.length === 0) {
+                            state.playersPending.push({
+                                id: state.myId,
+                                name: state.playerName,
+                                color: state.playerColor || '#b45309',
+                                type: 'player',
+                                isHost: true
+                            });
+                        }
+                        renderUI();
+                    } else {
+                        console.log('Guest joining room:', this.roomCode);
+                        this.sendToHost({
+                            type: 'JOIN',
+                            name: state.playerName,
+                            color: state.playerColor,
+                            skin: state.myCustomSkin
+                        });
+                    }
+                });
+
+                this.socket.on("timer_update", (data) => {
+                    state.planningTime = data.time;
+                    if (state.phase === data.phase || data.phase === 'idle') {
+                        const hud = document.getElementById('hud-timer-val');
+                        const modal = document.getElementById('modal-timer-val');
+                        if (hud) {
+                            hud.innerText = Math.ceil(data.time);
+                            if (data.time < 5) hud.classList.add('text-red-500', 'animate-pulse');
+                            else hud.classList.remove('text-red-500', 'animate-pulse');
+                        }
+                        if (modal) {
+                            modal.innerText = Math.ceil(data.time);
+                            if (data.time < 5) modal.classList.add('text-red-500');
+                            else modal.classList.remove('text-red-500');
+                        }
+                    }
+                });
+
+                this.socket.on("timer_end", (data) => {
+                    if (state.isHost) {
+                        if (state.phase === 'planning') {
+                            state.players.forEach(p => {
+                                if (!state.roundMoves[p.id]) {
+                                    const moves = getValidMoves(p.id, state.grid);
+                                    if (moves.length > 0) handlePlayerSelect(moves[0].r, moves[0].c, p.id);
+                                }
+                            });
+                            if (state.phase === 'planning') triggerQuestion();
+                        } else if (state.phase === 'question') {
+                            state.phase = 'resolution';
+                            state.battleMsg = "ВРЕМЕТО ИЗТЕЧЕ!";
+                            renderUI();
+                            this.broadcast({ type: 'STATE_SYNC', state: this.getSyncData() });
+
+                            setTimeout(() => {
+                                state.battleMsg = null;
+                                const results = state.roundResults || {};
+                                executeMultiResolution(results);
+                                if (state.isMultiplayer) this.broadcast({ type: 'STATE_SYNC', state: this.getSyncData() });
+                            }, 2000);
+                        }
+                    }
+                });
+
+                this.socket.on("receive_data", (data) => {
+                    const senderId = data.senderId;
+                    if (senderId === this.myId) return;
+                    this.handleData(data, senderId);
+                });
+
+                this.socket.on("player_updated", (data) => {
+                    if (this.isHost) {
+                        this.handleData({ type: 'PLAYER_UPDATE', senderId: data.id, payload: data.data }, data.id);
+                    }
+                });
+
+                this.socket.on("disconnect", () => {
+                    console.log("Disconnected from server");
+                    state.networkStatus = 'disconnected';
+                });
+
+                if (this.isHost) {
+                    if (this.heartbeat) clearInterval(this.heartbeat);
+                    this.heartbeat = setInterval(() => {
+                        if (state.phase !== 'lobby' && state.phase !== 'start') {
+                            this.broadcast({ type: 'STATE_SYNC', state: this.getSyncData(), isHeartbeat: true });
+                        }
+                    }, 3000);
+                }
+            }
+
+            broadcast(data) {
+                if (this.socket) {
+                    data.senderId = this.myId;
+                    this.socket.emit("send_data", { room: this.roomCode, data: data });
+                }
+            }
+
+            sendToHost(data) {
+                this.broadcast(data);
+            }
+
+            getSyncData() {
+                const fields = ['grid', 'players', 'phase', 'currentRound', 'roundMoves',
+                    'roundResults', 'currentQuestion', 'matchingRightOrder', 'scores', 'logs',
+                    'battleMsg', 'planningTime', 'timerEnd', 'matchPairsFound',
+                    'matchSelectedLeft', 'playerSkins', 'currentThemeId', 'allPlayerStats'
+                ];
+                const sync = {};
+                fields.forEach(f => {
+                    if (state[f] !== undefined) sync[f] = state[f];
+                });
+                return sync;
+            }
+
+            handleData(data, senderId) {
+                console.log('Received:', data.type, 'from', senderId);
+
+                switch (data.type) {
+                    case 'JOIN':
+                        if (this.isHost) {
+                            if (!state.playersPending.find(p => p.id === senderId)) {
+                                state.playersPending.push({
+                                    id: senderId,
+                                    name: data.name || `Играч`,
+                                    color: data.color || '#b45309',
+                                    type: 'player',
+                                    isHost: false
+                                });
+
+                                if (data.skin) {
+                                    state.playerSkins[senderId] = data.skin;
+                                }
+
+                                this.broadcast({
+                                    type: 'LOBBY_UPDATE', players: state.playersPending, roomCode: state.roomCode
+                                });
+
+                                if (state.phase !== 'lobby' && state.phase !== 'start') {
+                                    this.broadcast({
+                                        type: 'START_GAME',
+                                        players: state.players,
+                                        grid: state.grid,
+                                        mapSeed: state.mapSeed,
+                                        playerSkins: state.playerSkins,
+                                        gridRows: state.gridRows,
+                                        gridCols: state.gridCols,
+                                        currentThemeId: state.currentThemeId
+                                    });
+                                    this.broadcast({ type: 'STATE_SYNC', state: this.getSyncData() });
+                                }
+                                renderUI();
+                            }
+                        }
+                        break;
+                    case 'LOBBY_UPDATE':
+                        if (!this.isHost) {
+                            state.playersPending = data.players;
+                            state.roomCode = data.roomCode;
+                            renderUI();
+                        }
+                        break;
+                    case 'START_GAME':
+                        state.players = data.players;
+                        state.grid = data.grid;
+                        state.mapSeed = data.mapSeed;
+                        if (data.playerSkins) state.playerSkins = data.playerSkins;
+
+                        if (data.gridRows) state.gridRows = data.gridRows;
+                        if (data.gridCols) state.gridCols = data.gridCols;
+                        if (data.currentThemeId) state.currentThemeId = data.currentThemeId;
+
+                        state.phase = 'planning';
+                        state.phaseStartTime = Date.now();
+                        state.isSelecting = false;
+                        state.roundMoves = {};
+                        initBoard();
+                        renderUI();
+                        break;
+                    case 'STATE_SYNC':
+                        const syncFields = ['grid', 'phase', 'currentRound', 'roundMoves',
+                            'roundResults', 'currentQuestion', 'matchingRightOrder', 'scores',
+                            'logs', 'battleMsg', 'planningTime', 'timerEnd', 'matchPairsFound',
+                            'matchSelectedLeft', 'allPlayerStats'];
+
+                        if (data.state.players && Array.isArray(data.state.players)) {
+                            state.players = data.state.players;
+                        }
+
+                        const oldPhase = state.phase;
+
+                        syncFields.forEach(field => {
+                            if (data.state[field] !== undefined) {
+                                state[field] = data.state[field];
+                            }
+                        });
+
+                        if (!this.isHost && state.roundResults && state.myId && state.roundResults[state.myId] !== undefined) {
+                            if (!state.statUpdatedForRound) {
+                                if (state.roundResults[state.myId]) state.playerStats.correct++;
+                                else state.playerStats.wrong++;
+                                state.statUpdatedForRound = true;
+                            }
+                        }
+
+                        if (state.phase === 'planning' || state.phase === 'question') {
+                            if (state.phase !== oldPhase) state.statUpdatedForRound = false;
+                        }
+
+                        if (oldPhase === 'question' && state.phase !== 'question') {
+                            state.hasAnsweredLocally = false;
+                        }
+
+                        if (state.phase === 'planning' && oldPhase !== 'planning') {
+                            state.isSelecting = false;
+                        }
+
+                        updateBoard3D();
+                        renderUI();
+                        break;
+
+                    case 'SKIN_UPDATE':
+                        if (this.isHost) {
+                            state.playerSkins[senderId] = data.skin;
+                            this.broadcast({
+                                type: 'SKIN_SYNC', skins: state.playerSkins
+                            });
+                            renderUI();
+                        }
+                        break;
+                    case 'SKIN_SYNC':
+                        state.playerSkins = data.skins;
+                        if (state.phase !== 'lobby' && state.phase !== 'start') initBoard();
+                        break;
+                    case 'TIMER_SYNC':
+                        state.timerEnd = data.timerEnd;
+                        renderUI();
+                        break;
+
+                    case 'PLAYER_UPDATE':
+                        if (this.isHost) {
+                            const p = state.playersPending.find(pl => pl.id === senderId);
+                            if (p && data.payload) {
+                                if (data.payload.color) p.color = data.payload.color;
+                                if (data.payload.name) p.name = data.payload.name;
+                                this.broadcast({
+                                    type: 'LOBBY_UPDATE', players: state.playersPending, roomCode: state.roomCode
+                                });
+                                renderUI();
+                            }
+                        }
+                        break;
+                    case 'ACTION_SUBMIT':
+                        if (this.isHost) {
+                            console.log('Processing action from', senderId, ':', data.action);
+                            if (data.action === 'selectTile') window.handlePlayerSelect(data.r, data.c, senderId);
+                            else if (data.action === 'answer') window.handleAnswer(data.answer, senderId);
+                            this.broadcast({ type: 'STATE_SYNC', state: this.getSyncData() });
+                        }
+                        break;
+                }
+            }
+        }
+        const network = new NetworkManager();
+        window.network = network;
+    </script>
+    <style>
+        :root {
+            --glow-color: rgba(255, 215, 0, 0.2); /* Medieval gold glow */
+        }
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: 'Cinzel', serif; /* Apply Medieval Font */
+            user-select: none;
+        }
+
+        #game-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            touch-action: none;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .pointer-events-auto { pointer-events: auto; }
+
+        /* --- MINIMAP --- */
+        #minimap-container {
+            position: absolute;
+            bottom: 2rem;
+            left: 2rem;
+            width: 200px;
+            height: 200px;
+            background: rgba(28, 25, 23, 0.9);
+            border: 4px double rgba(180, 83, 9, 0.6);
+            border-radius: 0.5rem;
+            overflow: hidden;
+            z-index: 20;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(8px);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        #minimap-container:hover { transform: scale(1.05); border-color: rgba(217, 119, 6, 0.9); }
+        @media (max-width: 768px) { #minimap-container { width: 140px; height: 140px; bottom: 1rem; left: 1rem; border-radius: 0.25rem; } }
+
+        /* --- SCROLLBARS --- */
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(180, 83, 9, 0.5); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(180, 83, 9, 0.8); }
+    </style>
+</head>
+
+<body class="text-amber-50">
+
+<canvas id="game-canvas"></canvas>
+<canvas id="minimap-canvas" width="200" height="200" style="display:none;"></canvas> <!-- Hidden canvas for logic -->
+<div id="ui-layer"></div>
+
+<script>
+    // --- GLOBALS & ALIASES ---
+    const BufferGeometryUtils = THREE.BufferGeometryUtils;
+
+    // --- GAME DATA (BULGARIAN) ---
+    const DEFAULT_QUESTIONS = [
+        // Lit (9. Grade)
+        { id: 101, folderId: 'lit', type: 'multiple', q: "Кой е авторът на 'История славянобългарска'?", answers: ["Паисий Хилендарски", "Софроний Врачански", "Иван Вазов", "Христо Ботев"], correct: 0 },
+        { id: 102, folderId: 'lit', type: 'multiple', q: "През коя година е завършена 'История славянобългарска'?", answers: ["1762", "1878", "1396", "1885"], correct: 0 },
+        { id: 103, folderId: 'lit', type: 'multiple', q: "Кой литературен герой се бори с вятърни мелници?", answers: ["Дон Кихот", "Хамлет", "Ромео", "Гъливер"], correct: 0 },
+        { id: 104, folderId: 'lit', type: 'multiple', q: "Какъв жанр е 'Дон Жуан' на Байрон?", answers: ["Поема", "Роман", "Драма", "Епос"], correct: 0 },
+        { id: 105, folderId: 'lit', type: 'multiple', q: "Кой е авторът на 'Пътешествията на Гъливер'?", answers: ["Джонатан Суифт", "Даниел Дефо", "Томас Мор", "Шекспир"], correct: 0 },
+
+        // History (9. Grade)
+        { id: 201, folderId: 'hist', type: 'multiple', q: "Коя година избухва Френската революция?", answers: ["1789", "1848", "1917", "1776"], correct: 0 },
+        { id: 202, folderId: 'hist', type: 'multiple', q: "Кой владетел се обявява за Император на Франция през 1804?", answers: ["Наполеон Бонапарт", "Луи XIV", "Карл Велики", "Робеспиер"], correct: 0 },
+        { id: 203, folderId: 'hist', type: 'multiple', q: "Как се нарича периодът на Възраждането в Европа?", answers: ["Ренесанс", "Просвещение", "Средновековие", "Античност"], correct: 0 },
+        { id: 204, folderId: 'hist', type: 'multiple', q: "Кога е Освобождението на България?", answers: ["1878", "1885", "1908", "1944"], correct: 0 },
+        { id: 205, folderId: 'hist', type: 'multiple', q: "Кой е 'Апостолът на свободата'?", answers: ["Васил Левски", "Христо Ботев", "Георги Раковски", "Любен Каравелов"], correct: 0 },
+
+        // Geography
+        { id: 301, folderId: 'geo', type: 'multiple', q: "Кой икономически сектор включва земеделието?", answers: ["Първичен", "Вторичен", "Третичен", "Кватернерен"], correct: 0 },
+        { id: 302, folderId: 'geo', type: 'multiple', q: "Коя е най-населената държава в света (към 2024)?", answers: ["Индия", "Китай", "САЩ", "Русия"], correct: 0 },
+        { id: 303, folderId: 'geo', type: 'multiple', q: "Кой е най-големият океан?", answers: ["Тихият", "Атлантическият", "Индийският", "Северният ледовит"], correct: 0 },
+        { id: 304, folderId: 'geo', type: 'multiple', q: "Кои ресурси са възобновими?", answers: ["Слънчева енергия", "Въглища", "Нефт", "Природен газ"], correct: 0 },
+        { id: 305, folderId: 'geo', type: 'multiple', q: "Столицата на Австралия е?", answers: ["Канбера", "Сидни", "Мелбърн", "Пърт"], correct: 0 },
+
+        // Biology
+        { id: 401, folderId: 'bio', type: 'multiple', q: "Кой органел е 'електроцентралата' на клетката?", answers: ["Митохондрий", "Ядро", "Рибозома", "Лизозома"], correct: 0 },
+        { id: 402, folderId: 'bio', type: 'multiple', q: "Как се нарича деленето на половите клетки?", answers: ["Мейоза", "Митоза", "Амитоза", "Бинарно"], correct: 0 },
+        { id: 403, folderId: 'bio', type: 'multiple', q: "Основната структурна единица на живота е?", answers: ["Клетка", "Тъкан", "Орган", "Атом"], correct: 0 },
+        { id: 404, folderId: 'bio', type: 'multiple', q: "ДНК съхранява?", answers: ["Наследствена информация", "Енергия", "Мазнини", "Вода"], correct: 0 },
+        { id: 405, folderId: 'bio', type: 'multiple', q: "Прокариотите нямат обособено:", answers: ["Ядро", "Клетъчна мембрана", "Рибозоми", "Цитоплазма"], correct: 0 },
+
+        // Physics
+        { id: 501, folderId: 'phys', type: 'multiple', q: "Каква е единицата за електрично съпротивление?", answers: ["Ом", "Ампер", "Волт", "Ват"], correct: 0 },
+        { id: 502, folderId: 'phys', type: 'multiple', q: "Закон на Ом:", answers: ["I = U/R", "U = I/R", "R = U*I", "P = U*I"], correct: 0 },
+        { id: 503, folderId: 'phys', type: 'multiple', q: "Електричният ток е насочено движение на?", answers: ["Електрони", "Протони", "Неутрони", "Атоми"], correct: 0 },
+        { id: 504, folderId: 'phys', type: 'multiple', q: "Уред за измерване на напрежение?", answers: ["Волтметър", "Амперметър", "Омметър", "Везни"], correct: 0 },
+        { id: 505, folderId: 'phys', type: 'multiple', q: "Скоростта на светлината във вакуум е?", answers: ["300 000 км/с", "300 км/с", "3000 км/с", "30 км/с"], correct: 0 },
+
+        // Chemistry
+        { id: 601, folderId: 'chem', type: 'multiple', q: "Химичният знак на натрия е?", answers: ["Na", "N", "Ni", "Ne"], correct: 0 },
+        { id: 602, folderId: 'chem', type: 'multiple', q: "рН = 7 означава каква среда?", answers: ["Неутрална", "Киселинна", "Основни", "Силно киселинна"], correct: 0 },
+        { id: 603, folderId: 'chem', type: 'multiple', q: "Химичната връзка в готварската сол (NaCl) е?", answers: ["Йонна", "Ковалентна полярна", "Ковалентна неполярна", "Метална"], correct: 0 },
+        { id: 604, folderId: 'chem', type: 'multiple', q: "Кой газ е основна съставна част на въздуха?", answers: ["Азот", "Кислород", "Въглероден диоксид", "Водород"], correct: 0 },
+        { id: 605, folderId: 'chem', type: 'multiple', q: "Формулата на сярната киселина е?", answers: ["H2SO4", "HCl", "HNO3", "H2O"], correct: 0 },
+
+        // Math
+        { id: 701, folderId: 'math', type: 'multiple', q: "Колко е дискриминантата на x² - 4x + 3 = 0?", answers: ["4", "16", "12", "-4"], correct: 0 },
+        { id: 702, folderId: 'math', type: 'multiple', q: "Корен квадратен от 144 е?", answers: ["12", "14", "11", "13"], correct: 0 },
+        { id: 703, folderId: 'math', type: 'multiple', q: "Синус от 30 градуса е?", answers: ["0.5", "1", "0", "0.866"], correct: 0 },
+        { id: 704, folderId: 'math', type: 'multiple', q: "Графиката на функцията y = x² е?", answers: ["Парабола", "Хипербола", "Права линия", "Окръжност"], correct: 0 },
+        { id: 705, folderId: 'math', type: 'multiple', q: "Лице на триъгълник се намира чрез?", answers: ["(a * ha) / 2", "a * b", "a + b + c", "a * ha"], correct: 0 },
+
+        // English
+        { id: 801, folderId: 'eng', type: 'multiple', q: "Past Participle of 'go'?", answers: ["Gone", "Went", "Go", "Going"], correct: 0 },
+        { id: 802, folderId: 'eng', type: 'multiple', q: "Translate 'Awareness':", answers: ["Осъзнатост", "Страх", "Умора", "Щастие"], correct: 0 },
+        { id: 803, folderId: 'eng', type: 'multiple', q: "Opposite of 'Brave'?", answers: ["Cowardly", "Strong", "Happy", "Fast"], correct: 0 },
+        { id: 804, folderId: 'eng', type: 'multiple', q: "Plural of 'Mouse'?", answers: ["Mice", "Mouses", "Mouse", "Meeses"], correct: 0 },
+        { id: 805, folderId: 'eng', type: 'multiple', q: "Which tense is: 'I have been reading'?", answers: ["Present Perfect Continuous", "Present Simple", "Past Simple", "Future Simple"], correct: 0 },
+
+    ];
+
+    const THEMES = {
+        spring: {
+            id: 'spring', name: '🏰 Кралство', icon: 'castle',
+            bgClass: 'bg-stone-900', textClass: 'text-amber-50',
+            uiBg: 'bg-stone-900/95 backdrop-blur border-4 border-double border-amber-800 shadow-[0_0_40px_rgba(0,0,0,0.8)]', uiBorder: 'border-amber-700/50', accent: 'text-amber-500',
+            btnPrimary: 'bg-red-900 hover:bg-red-800 text-amber-100 border border-amber-600/50 shadow-[0_0_15px_rgba(180,83,9,0.4)]',
+            uiInputBg: 'bg-stone-950 text-amber-100 border-amber-900 placeholder:text-amber-700/40',
+            uiButtonSecondary: 'bg-stone-800 hover:bg-stone-700 text-amber-200 border border-amber-900',
+            colors: {
+                // MEDIEVAL 3D ENVIRONMENT COLORS
+                groundTop: 0x4a5e28,    // Moody mossy grass
+                groundSide: 0x362c24,   // Dark mud/rock sides
+                groundSnow: 0xd1d5db,
+                edge: 0x6b8e23,
+                background: 0x3a4550,   // Moody slate sky
+                castle: 0x787b80,       // Weathered dark stone
+                trunk: 0x3d2817,        // Dark deadwood
+                foliage: 0x1e3f1c,      // Dark deep forest
+                water: 0x124059,        // Deep, murky water
+                rock: 0x50575e,         // Slate rocks
+                grass: 0x556b2f,
+                sun: 0xffcc77,          // Warmer afternoon sun
+                house: 0x5e4b3c         // Weathered wood/thatch for villages
+            },
+            lighting: {
+                ambientColor: 0xffe6cc, ambientIntensity: 0.5,
+                dirColor: 0xffddaa, dirIntensity: 1.1,
+                fogColor: 0x3a4550, fogNear: 1500, fogFar: 25000, // Restored distance for background mountains
+                toneMappingExposure: 1.0
+            },
+            generateColor: (i, count) => `hsl(${210 + (i * 40) % 150}, 70%, 55%)`
+        }
+    };
+
+    // --- STATE ---
+    const state = {
+        gridRows: 20, gridCols: 20, customMap: [], currentThemeId: 'spring',
+        players: [], grid: [], scores: {}, phase: 'start', currentRound: 1, roundMoves: {},
+        currentQuestion: null, logs: [], questions: [...DEFAULT_QUESTIONS], questionsDeck: [],
+        folders: [
+            { id: 'default', name: 'Общи' },
+            { id: 'lit', name: 'Литература (9. клас)' },
+            { id: 'hist', name: 'История (9. клас)' },
+            { id: 'geo', name: 'География (9. клас)' },
+        ],
+        radiusMapping: [],
+        questionsMap: {},
+
+        showQuestionsEditor: false, showRadiusConfig: false, editingQ: null, shouldShuffle: true,
+        playerStats: { correct: 0, wrong: 0, bonus: 0 },
+        matchSelectedLeft: null, matchPairsFound: [], matchingRightOrder: [],
+        battleMsg: null, hoveredTile: null, battleIcons: [],
+        flashTimer: 0,
+        mapSeed: Math.random() * 100,
+        isMultiplayer: false,
+        isHost: false,
+        myId: 'p1',
+        roomCode: null,
+        playersPending: [],
+        networkStatus: 'disconnected',
+        planningTime: 30,
+        timerEnd: 0,
+        lastSyncedTime: 0,
+        showTimer: false,
+        playerName: '',
+        playerColor: '#b45309', // Default to amber
+        playerSkins: {},
+
+        selectedAnswerIdx: null,
+        showAssetInspector: false,
+        inspectorAssetType: 'tree',
+        inspectorRotate: 0,
+        showSkinEditor: false,
+        skinEditorMode: 'castle',
+        skinEditorGrid: Array(4).fill().map(() => Array(8).fill().map(() => Array(8).fill(0))),
+        myCustomSkin: { castle: null, wall: null },
+        phaseStartTime: Date.now(),
+        isSelecting: false,
+        blockInput: false,
+
+        // --- UPDATED TERRAIN CONFIG FOR ISLAND LOOK ---
+        terrainConfig: {
+            mountainHeight: 18,
+            mountainThreshold: 1800,
+            mountainScale: 0.08,
+            mountainNoiseScale: 0.004,
+            seabedHeight: -10,
+            islandRadius: 0.75,     // Smaller radius for focused island
+            islandHeight: 12,       // Higher peaks
+            islandBaseHeight: 6,
+            islandFalloff: 0.25,    // Sharper cliffs
+            waterHeight: 0.5,
+            waveAmplitude: 0.3,
+            waveSpeed: 1.0,
+            waterOpacity: 0.8
+        }
+    };
+
+    state.radiusMapping = state.folders.map((f, i) => ({
+        maxDist: (i + 1) * 6,
+        folderId: f.id
+    }));
+    state.questions.forEach(q => { if (!q.folderId) q.folderId = 'default'; });
+
+    window.state = state;
+
+    // --- THREE.JS GLOBALS ---
+    let scene, camera, renderer, controls, raycaster;
+    const clock = new THREE.Clock();
+    let tileMeshes = [];
+    const mouse = new THREE.Vector2();
+    let ambientLight, directionalLight;
+
+    // --- HELPER FUNCTIONS ---
+    function getHexDistance(r1, c1, r2, c2) {
+        const q1 = c1 - (r1 - (r1 & 1)) / 2;
+        const q2 = c2 - (r2 - (r2 & 1)) / 2;
+        const tr1 = r1; const tr2 = r2;
+        const x1 = q1, z1 = tr1, y1 = -x1 - z1;
+        const x2 = q2, z2 = tr2, y2 = -x2 - z2;
+        return (Math.abs(x1 - x2) + Math.abs(y1 - y2) + Math.abs(z1 - z2)) / 2;
+    }
+    function getTheme() { return THEMES[state.currentThemeId] || THEMES.spring; }
+    function isEliminated() {
+        const p = state.players.find(p => p.id === state.myId);
+        return p ? !!p.eliminated : false;
+    }
+
+    // --- BUILDER MANAGER ---
+    class BuilderManager {
+        constructor() {
+            this.builders = [];
+            const geo = typeof buildPrototype === 'function' ? buildPrototype('knight') : new THREE.CylinderGeometry(0.1, 0.1, 0.5);
+            const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4, metalness: 0.5 });
+            this.mesh = new THREE.InstancedMesh(geo, mat, 500);
+            this.knightScale = 1.0;
+
+            this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            this.mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(500 * 3), 3);
+            scene.add(this.mesh);
+            this.dummy = new THREE.Object3D();
+        }
+
+        spawnBuilders(targetHexes, ownerPid) {
+            const spawnPoints = [];
+            state.grid.forEach((row, r) => row.forEach((cell, c) => {
+                if (cell.active && cell.owner === ownerPid && cell.base) {
+                    spawnPoints.push({ r, c });
+                }
+            }));
+            if (spawnPoints.length === 0) return;
+            targetHexes.forEach(target => {
+                let closest = null; let minDist = Infinity;
+                const tx = (target.c * Math.sqrt(3)) - (target.r % 2) * 0.5; const ty = target.r * 1.5;
+                spawnPoints.forEach(sp => {
+                    const sx = (sp.c * Math.sqrt(3)) - (sp.r % 2) * 0.5; const sy = sp.r * 1.5;
+                    const d = (tx - sx) * (tx - sx) + (ty - sy) * (ty - sy);
+                    if (d < minDist) { minDist = d; closest = sp; }
+                });
+                if (closest) {
+                    const { spacingX, spacingY, offsetX, offsetY, getH } = state;
+                    const startX = (closest.c * spacingX) + (closest.r % 2 !== 0 ? spacingX / 2 : 0) - offsetX;
+                    const startZ = (closest.r * spacingY) - offsetY;
+                    const startH = getH((startZ + offsetY) / spacingY, (startX + offsetX) / spacingX);
+                    const endX = (target.c * spacingX) + (target.r % 2 !== 0 ? spacingX / 2 : 0) - offsetX;
+                    const endZ = (target.r * spacingY) - offsetY;
+                    const endH = getH((endZ + offsetY) / spacingY, (endX + offsetX) / spacingX);
+                    const color = new THREE.Color(state.players.find(p => p.id === ownerPid).color);
+                    const count = 1 + Math.floor(Math.random() * 2);
+                    for (let i = 0; i < count; i++) {
+                        this.builders.push({
+                            start: new THREE.Vector3(startX, startH, startZ),
+                            target: new THREE.Vector3(endX + (Math.random() - 0.5) * 0.5, endH, endZ + (Math.random() - 0.5) * 0.5),
+                            pos: new THREE.Vector3(startX, startH, startZ),
+                            progress: 0, color: color, speed: 0.8 + Math.random() * 0.5, active: true
+                        });
+                    }
+                }
+            });
+        }
+        update(delta) {
+            let updated = false;
+            this.builders.forEach((b, i) => {
+                if (!b.active) return;
+                b.progress += delta * b.speed;
+                if (b.progress >= 1.0) { b.progress = 1.0; b.active = false; }
+                b.pos.lerpVectors(b.start, b.target, b.progress);
+                b.pos.y += Math.sin(b.progress * Math.PI) * 1.5;
+                this.dummy.position.copy(b.pos);
+                this.dummy.scale.setScalar(this.knightScale);
+                this.dummy.lookAt(b.target.x, b.pos.y, b.target.z);
+                this.dummy.updateMatrix();
+                this.mesh.setMatrixAt(i, this.dummy.matrix);
+                this.mesh.setColorAt(i, b.color);
+                updated = true;
+            });
+            if (updated) {
+                this.mesh.instanceMatrix.needsUpdate = true;
+                if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+            }
+        }
+    }
+
+    function addLog(msg) { state.logs = [msg, ...state.logs].slice(0, 5); }
+    function calculateGrade(pid) {
+        let stats = state.playerStats;
+        if (pid && state.allPlayerStats && state.allPlayerStats[pid]) stats = state.allPlayerStats[pid];
+        else if (pid && state.playerSkins && state.isMultiplayer) stats = { correct: 0, wrong: 0, bonus: 0 };
+        if ((state.phase === 'victory' || state.phase === 'gameover') && pid) {
+            const activeOwners = new Set();
+            state.grid.flat().forEach(c => { if (c.base && c.owner) activeOwners.add(c.owner); });
+            if (activeOwners.has(pid) && activeOwners.size === 1) return "6.00";
+        }
+        const { correct, wrong, bonus } = stats;
+        const total = correct + wrong + (bonus || 0);
+        return total === 0 ? "2.00" : Math.min(6, 2 + ((correct + (bonus || 0)) / total) * 4).toFixed(2);
+    }
+
+    const terrainNoise = (x, z) => {
+        const sin = Math.sin;
+        return sin(x * 0.1 + z * 0.15) * 0.5 +
+            sin(x * 0.3 - z * 0.2) * 0.25 +
+            sin(x * 0.5 + z * 0.5) * 0.125;
+    };
+
+    const getComputedHeight = (r, c, rows, cols, seed, mode = 'all') => {
+        const cfg = state.terrainConfig;
+        const spacingX = Math.sqrt(3), spacingY = 1.5;
+        const x = (c - cols / 2) * spacingX;
+        const z = (r - rows / 2) * spacingY;
+        const distInUnits = Math.sqrt(x * x + z * z);
+        let height = cfg.seabedHeight;
+
+        if (mode === 'all' || mode === 'island') {
+            const n = (terrainNoise(c + seed, r + seed) + 0.8) / 1.6;
+            const islandRadius = Math.max(cols * spacingX, rows * spacingY) * cfg.islandRadius;
+            const normalizedDist = distInUnits / islandRadius;
+            const falloff = Math.pow(Math.max(0, 1.0 - normalizedDist), cfg.islandFalloff);
+            const mainlandHeight = (n * cfg.islandHeight + cfg.islandBaseHeight) * falloff;
+            const blend = Math.max(0, Math.min(1, (normalizedDist - 0.7) / 0.4));
+            height = mainlandHeight + (blend * cfg.seabedHeight);
+            height = Math.max(cfg.seabedHeight, height);
+        }
+
+        if (mode === 'all' || mode === 'mountains') {
+            const mountainDist = distInUnits;
+            if (mountainDist > cfg.mountainThreshold - 500) {
+                const mNoise = (terrainNoise(c * cfg.mountainNoiseScale + seed, r * cfg.mountainNoiseScale - seed) + 1) * 0.5;
+                const mountainScale = Math.max(0, mountainDist - cfg.mountainThreshold) * cfg.mountainScale;
+                const mountainPeaks = Math.pow(Math.max(0, mNoise - 0.4), 1.6) * mountainScale * cfg.mountainHeight;
+                height += mountainPeaks;
+            }
+        }
+        return height;
+    };
+
+    function createProceduralMaterials(theme) {
+        const cTop = new THREE.Color(theme.colors.groundTop);
+        const cSide = new THREE.Color(theme.colors.groundSide);
+        const sideMat = new THREE.MeshStandardMaterial({ color: cSide, roughness: 0.9, side: THREE.DoubleSide });
+        const topMat = new THREE.MeshStandardMaterial({ color: cTop, roughness: 1.0 });
+        return [sideMat, topMat, sideMat];
+    }
+
+    // --- INIT ---
+    function init() {
+        const canvas = document.getElementById('game-canvas');
+        scene = new THREE.Scene();
+        const isMobile = window.innerWidth <= 768;
+        camera = new THREE.PerspectiveCamera(isMobile ? 75 : 50, window.innerWidth / window.innerHeight, 0.1, 40000);
+        camera.position.set(0, 40, 50);
+
+        renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+        const theme = getTheme();
+        const lighting = theme.lighting;
+
+        scene.background = new THREE.Color(lighting.fogColor);
+        scene.fog = new THREE.Fog(lighting.fogColor, lighting.fogNear, lighting.fogFar);
+
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = lighting.toneMappingExposure;
+
+        controls = new THREE.OrbitControls(camera, canvas);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.maxPolarAngle = Math.PI / 2.2;
+        controls.minDistance = 20;
+        controls.maxDistance = 150;
+        controls.autoRotate = false;
+
+        raycaster = new THREE.Raycaster();
+
+        ambientLight = new THREE.AmbientLight(lighting.ambientColor, lighting.ambientIntensity);
+        scene.add(ambientLight);
+
+        directionalLight = new THREE.DirectionalLight(lighting.dirColor, lighting.dirIntensity);
+        directionalLight.position.set(50, 60, 30);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.1;
+        directionalLight.shadow.camera.far = 200;
+        directionalLight.shadow.camera.left = -60;
+        directionalLight.shadow.camera.right = 60;
+        directionalLight.shadow.camera.top = 60;
+        directionalLight.shadow.camera.bottom = -60;
+        scene.add(directionalLight);
+
+
+        loadAssets(() => {
+            if (!state.grid || state.grid.length === 0) {
+                state.grid = Array(state.gridRows).fill().map((_, r) =>
+                    Array(state.gridCols).fill().map((_, c) => ({
+                        active: true, owner: null, base: false,
+                        terrainHeight: (typeof getComputedHeight === 'function') ? getComputedHeight(r, c, state.gridRows, state.gridCols, state.mapSeed) : 1,
+                        isForest: terrainNoise(c + state.mapSeed + 500, r + state.mapSeed + 500) > 0.25
+                    }))
+                );
+            }
+            initBoard();
+            renderUI();
+            animate();
+        });
+
+        window.addEventListener('resize', onWindowResize);
+
+        let isDragging = false;
+        let startPointerPos = new THREE.Vector2();
+
+        const updateMouse = (e) => {
+            const rect = canvas.getBoundingClientRect();
+            let x, y;
+            if (e.clientX !== undefined) { x = e.clientX; y = e.clientY; }
+            else if (e.touches && e.touches.length > 0) { x = e.touches[0].clientX; y = e.touches[0].clientY; }
+            else if (e.changedTouches && e.changedTouches.length > 0) { x = e.changedTouches[0].clientX; y = e.changedTouches[0].clientY; }
+            if (x === undefined) return;
+            mouse.x = ((x - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((y - rect.top) / rect.height) * 2 + 1;
+        };
+
+        canvas.addEventListener('pointerdown', (e) => {
+            isDragging = false;
+            let x = e.clientX; let y = e.clientY;
+            if (x === undefined && e.touches && e.touches.length > 0) { x = e.touches[0].clientX; y = e.touches[0].clientY; }
+            if (x !== undefined) startPointerPos.set(x, y);
+            updateMouse(e);
+        });
+
+        canvas.addEventListener('pointermove', (e) => {
+            let x = e.clientX; let y = e.clientY;
+            if (x === undefined && e.touches && e.touches.length > 0) { x = e.touches[0].clientX; y = e.touches[0].clientY; }
+            if (x === undefined) return;
+            const dist = Math.sqrt(Math.pow(x - startPointerPos.x, 2) + Math.pow(y - startPointerPos.y, 2));
+            if (dist > 25) isDragging = true;
+            updateMouse(e);
+        });
+
+        canvas.addEventListener('pointerup', (e) => {
+            if (!isDragging) {
+                updateMouse(e);
+                onCanvasClick(e);
+            }
+        });
+    }
+
+    function onWindowResize() {
+        const isMobile = window.innerWidth <= 768;
+        camera.fov = isMobile ? 75 : 50;
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        if (window.resizeTimeout) clearTimeout(window.resizeTimeout);
+        window.resizeTimeout = setTimeout(fitCamera, 100);
+    }
+
+    function fitCamera() {
+        if (!state.gridCols) return;
+        const aspect = camera.aspect;
+        const boardW = state.gridCols * 2;
+        const boardH = state.gridRows * 1.5;
+        const padding = 1.2;
+        const vFOV = camera.fov * Math.PI / 180;
+        const distH = (boardW * padding) / (2 * Math.tan(vFOV / 2) * aspect);
+        const distV = (boardH * padding) / (2 * Math.tan(vFOV / 2));
+        const targetDist = Math.max(distH, distV, 40);
+        const direction = new THREE.Vector3().copy(camera.position).sub(controls.target).normalize();
+        const newPos = direction.multiplyScalar(targetDist).add(controls.target);
+        if (camera.position.distanceTo(newPos) > 1) {
+            camera.position.copy(newPos);
+            controls.update();
+        }
+    }
+
+    function getTargetHex(mouseVec) {
+        if (!state.terrainMesh) return null;
+        raycaster.setFromCamera(mouseVec, camera);
+        const intersects = raycaster.intersectObject(state.terrainMesh);
+        if (intersects.length > 0) {
+            const p = intersects[0].point;
+            const hexRadius = 1;
+            const spacingX = hexRadius * Math.sqrt(3);
+            const spacingY = hexRadius * 1.5;
+            const offsetX = (state.gridCols * spacingX) / 2;
+            const offsetY = (state.gridRows * spacingY) / 2;
+            const r = Math.round((p.z + offsetY) / spacingY);
+            const rowShift = (r % 2 !== 0) ? spacingX / 2 : 0;
+            const c = Math.round((p.x + offsetX - rowShift) / spacingX);
+            if (!window.tileMap) return null;
+            return window.tileMap.get(`${r},${c}`);
+        }
+        return null;
+    }
+
+    function onCanvasClick(event) {
+        if (state.blockInput) return;
+        if (isEliminated()) return;
+        const target = getTargetHex(mouse);
+        if (target) {
+            if (state.phase === 'start') { toggleEditorCell(target.userData.r, target.userData.c); }
+            else if (state.phase === 'planning') { handlePlayerSelect(target.userData.r, target.userData.c); }
+        }
+    }
+
+    // --- 3D BOARD LOGIC ---
+    let terrainMesh = null;
+
+    function buildWallGeometry(width, height, depth) {
+        const geometries = [];
+        const baseH = height * 0.3;
+        const baseGeo = new THREE.BoxGeometry(width, baseH, depth * 1.4);
+        baseGeo.translate(0, baseH / 2, 0); geometries.push(baseGeo);
+        const bodyH = height * 0.5;
+        const bodyGeo = new THREE.BoxGeometry(width, bodyH, depth);
+        bodyGeo.translate(0, baseH + bodyH / 2, 0); geometries.push(bodyGeo);
+        const toothH = height * 0.2; const toothW = depth; const gapW = depth * 0.8;
+        const numTeeth = Math.floor(width / (toothW + gapW));
+        const startX = -((numTeeth * (toothW + gapW)) - gapW) / 2;
+        for (let i = 0; i < numTeeth; i++) {
+            const toothGeo = new THREE.BoxGeometry(toothW, toothH, depth * 1.1);
+            toothGeo.translate(startX + i * (toothW + gapW) + toothW / 2, baseH + bodyH + toothH / 2, 0);
+            geometries.push(toothGeo);
+        }
+        const merged = BufferGeometryUtils.mergeBufferGeometries(geometries);
+        geometries.forEach(g => g.dispose());
+        return merged;
+    }
+
+    // --- ENHANCED BUILD PROTOTYPE (THE CASTLE & CITY UPDATE) ---
+    function buildPrototype(type, theme = getTheme()) {
+        let parts = [];
+        try {
+            if (type === 'tree') {
+                const trunk = new THREE.CylinderGeometry(0.1, 0.15, 0.8, 8);
+                trunk.translate(0, 0.4, 0); parts.push(trunk);
+                for (let i = 0; i < 5; i++) {
+                    const s = new THREE.SphereGeometry(0.4, 6, 6);
+                    const angle = (i / 5) * Math.PI * 2;
+                    s.translate(Math.cos(angle) * 0.25, 1.2 + Math.sin(i * 2) * 0.2, Math.sin(angle) * 0.25);
+                    parts.push(s);
+                }
+                const top = new THREE.SphereGeometry(0.35, 6, 6);
+                top.translate(0, 1.7, 0); parts.push(top);
+            } else if (type === 'rock') {
+                const main = new THREE.DodecahedronGeometry(0.5, 0);
+                main.scale(1, 0.7, 1); main.translate(0, 0.25, 0); parts.push(main);
+                const p2 = new THREE.DodecahedronGeometry(0.35, 0); p2.translate(0.4, 0.1, 0); parts.push(p2);
+                const p3 = new THREE.DodecahedronGeometry(0.25, 0); p3.translate(-0.3, 0.1, 0.3); parts.push(p3);
+            } else if (type === 'bush') {
+                for (let i = 0; i < 5; i++) {
+                    const b = new THREE.SphereGeometry(0.3, 5, 5);
+                    const r = 0.3; const ang = Math.random() * Math.PI * 2;
+                    b.translate(Math.cos(ang) * r, 0.15 + Math.random() * 0.1, Math.sin(ang) * r);
+                    parts.push(b);
+                }
+            } else if (type === 'house') {
+                // Procedural small village house
+                const base = new THREE.BoxGeometry(0.35, 0.3, 0.35);
+                base.translate(0, 0.15, 0); parts.push(base);
+                const roof = new THREE.ConeGeometry(0.32, 0.35, 4);
+                roof.rotateY(Math.PI / 4);
+                roof.translate(0, 0.45, 0); parts.push(roof);
+            } else if (type === 'castle') {
+                // Highly detailed diorama castle
+                // Base foundation
+                const foundation = new THREE.BoxGeometry(1.6, 0.4, 1.6);
+                foundation.translate(0, 0.2, 0); parts.push(foundation);
+
+                // Main Keep
+                const keep = new THREE.BoxGeometry(0.8, 1.2, 0.8);
+                keep.translate(0, 0.8, 0); parts.push(keep);
+
+                // Keep Roof
+                const kRoof = new THREE.ConeGeometry(0.7, 0.6, 4);
+                kRoof.rotateY(Math.PI / 4);
+                kRoof.translate(0, 1.7, 0); parts.push(kRoof);
+
+                // 4 Corner Towers
+                [[-0.6, -0.6], [0.6, -0.6], [0.6, 0.6], [-0.6, 0.6]].forEach(([tx, tz]) => {
+                    const tower = new THREE.CylinderGeometry(0.2, 0.25, 1.6, 8);
+                    tower.translate(tx, 0.8, tz); parts.push(tower);
+                    const tRoof = new THREE.ConeGeometry(0.28, 0.6, 8);
+                    tRoof.translate(tx, 1.9, tz); parts.push(tRoof);
+
+                    // Small flags on top of towers
+                    const pole = new THREE.CylinderGeometry(0.015, 0.015, 0.4);
+                    pole.translate(tx, 2.3, tz); parts.push(pole);
+                    const flag = new THREE.BoxGeometry(0.15, 0.1, 0.01);
+                    flag.translate(tx + 0.075, 2.4, tz); parts.push(flag);
+                });
+
+                // Connecting Walls
+                const wallH = 0.8;
+                const wallT = 0.2;
+                const w1 = new THREE.BoxGeometry(1.2, wallH, wallT); w1.translate(0, wallH/2, -0.6); parts.push(w1);
+                const w2 = new THREE.BoxGeometry(1.2, wallH, wallT); w2.translate(0, wallH/2, 0.6); parts.push(w2);
+                const w3 = new THREE.BoxGeometry(wallT, wallH, 1.2); w3.translate(-0.6, wallH/2, 0); parts.push(w3);
+                const w4 = new THREE.BoxGeometry(wallT, wallH, 1.2); w4.translate(0.6, wallH/2, 0); parts.push(w4);
+
+                // Gatehouse projection
+                const gate = new THREE.BoxGeometry(0.4, 0.6, 0.3);
+                gate.translate(0, 0.3, 0.75); parts.push(gate);
+                const arch = new THREE.CylinderGeometry(0.12, 0.12, 0.32, 8);
+                arch.rotateZ(Math.PI / 2); arch.translate(0, 0.2, 0.75); parts.push(arch);
+            }
+
+            if (parts.length === 0) return new THREE.BoxGeometry(0.1, 0.1, 0.1);
+            const validParts = parts.filter(p => p && p.attributes && p.attributes.position).map(p => {
+                const ni = p.index ? p.toNonIndexed() : p.clone();
+                if (!ni.attributes.uv) {
+                    const count = ni.attributes.position.count;
+                    ni.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(count * 2), 2));
+                }
+                return ni;
+            });
+            const merged = BufferGeometryUtils.mergeBufferGeometries(validParts);
+
+            if (type === 'tree' && merged) merged.scale(1.5, 1.5, 1.5);
+            if (type === 'rock' && merged) merged.scale(1.2, 1.2, 1.2);
+            if (type === 'bush' && merged) merged.scale(1.5, 1.5, 1.5);
+            if (type === 'house' && merged) merged.scale(1.8, 1.8, 1.8);
+
+            validParts.forEach(p => p.dispose());
+            return merged;
+        } catch (e) {
+            console.error("Merge error for type " + type, e);
+            return new THREE.BoxGeometry(0.2, 0.2, 0.2);
+        } finally {
+            parts.forEach(p => p.dispose());
+        }
+    }
+
+    function initBoard() {
+        tileMeshes = [];
+        window.tileMap = new Map();
+        state.battleIcons = [];
+        if (terrainMesh) { scene.remove(terrainMesh); terrainMesh.geometry.dispose(); terrainMesh = null; }
+        if (state.hexInstMesh) { scene.remove(state.hexInstMesh); state.hexInstMesh.geometry.dispose(); if (state.hexInstMesh.material.dispose) state.hexInstMesh.material.dispose(); state.hexInstMesh = null; }
+        if (state.wallInstMesh) { scene.remove(state.wallInstMesh); state.wallInstMesh.geometry.dispose(); if (state.wallInstMesh.material.dispose) state.wallInstMesh.material.dispose(); state.wallInstMesh = null; }
+        if (window.instNature) {
+            Object.values(window.instNature).forEach(m => { scene.remove(m); m.geometry.dispose(); if (m.material.dispose) m.material.dispose(); });
+            window.instNature = null;
+        }
+        if (window.environmentObjects) {
+            window.environmentObjects.forEach(obj => { scene.remove(obj); if (obj.geometry) obj.geometry.dispose(); if (obj.material && obj.material.dispose) obj.material.dispose(); });
+            window.environmentObjects = [];
+        }
+
+        const theme = getTheme();
+        const cfg = state.terrainConfig || {};
+
+        const lighting = theme.lighting || {
+            ambientColor: 0xffe6cc, ambientIntensity: 0.5,
+            dirColor: 0xffddaa, dirIntensity: 1.1,
+            fogColor: 0x3a4550, fogNear: 50, fogFar: 10000,
+            toneMappingExposure: 1.0
+        };
+
+        scene.background = new THREE.Color(lighting.fogColor || 0x3a4550);
+        if (!scene.fog || !(scene.fog instanceof THREE.Fog)) {
+            scene.fog = new THREE.Fog(lighting.fogColor || 0x3a4550, lighting.fogNear || 30, lighting.fogFar || 200);
+        } else {
+            scene.fog.color.setHex(lighting.fogColor || 0x3a4550);
+            scene.fog.near = lighting.fogNear || 30;
+            scene.fog.far = lighting.fogFar || 200;
+        }
+
+        if (ambientLight) {
+            ambientLight.color.setHex(lighting.ambientColor);
+            ambientLight.intensity = lighting.ambientIntensity;
+        }
+        if (directionalLight) {
+            directionalLight.color.setHex(lighting.dirColor);
+            directionalLight.intensity = lighting.dirIntensity;
+        }
+
+        if (renderer) renderer.toneMappingExposure = lighting.toneMappingExposure;
+
+        const cols = state.gridCols;
+        const rows = state.gridRows;
+        const hexRadius = 1;
+        const spacingX = hexRadius * Math.sqrt(3);
+        const spacingY = hexRadius * 1.5;
+        const offsetX = (cols * spacingX) / 2;
+        const offsetY = (rows * spacingY) / 2;
+
+        const materials = createProceduralMaterials(theme);
+        const groundMat = materials[1];
+
+        const planeW = cols * spacingX * 3;
+        const planeH = rows * spacingY * 3;
+        const planeGeo = new THREE.PlaneGeometry(planeW, planeH, 128, 128);
+        planeGeo.rotateX(-Math.PI / 2);
+
+        const getH = (r, c) => getComputedHeight(r, c, rows, cols, state.mapSeed);
+
+        const getNormal = (r, c) => {
+            const step = 0.05;
+            const h = getH(r, c);
+            const hR = getH(r, c + step);
+            const hD = getH(r + step, c);
+            const v1 = new THREE.Vector3(step * spacingX, hR - h, 0);
+            const v2 = new THREE.Vector3(0, hD - h, step * spacingY);
+            return new THREE.Vector3().crossVectors(v2, v1).normalize();
+        };
+        state.spacingX = spacingX; state.spacingY = spacingY;
+        state.offsetX = offsetX; state.offsetY = offsetY;
+        state.getH = getH; state.getNormal = getNormal;
+        state.hexRadius = hexRadius;
+
+        const posAttr = planeGeo.attributes.position;
+        for (let i = 0; i < posAttr.count; i++) {
+            const x = posAttr.getX(i);
+            const z = posAttr.getZ(i);
+            const c = (x + offsetX) / spacingX;
+            const r = (z + offsetY) / spacingY;
+            posAttr.setY(i, getComputedHeight(r, c, rows, cols, state.mapSeed, 'island'));
+        }
+        planeGeo.computeVertexNormals();
+        terrainMesh = new THREE.Mesh(planeGeo, groundMat);
+        terrainMesh.receiveShadow = true;
+        scene.add(terrainMesh);
+        state.terrainMesh = terrainMesh;
+
+        const horizonGeo = new THREE.PlaneGeometry(60000, 60000, 384, 384);
+        horizonGeo.rotateX(-Math.PI / 2);
+        const horAttr = horizonGeo.attributes.position;
+        for (let i = 0; i < horAttr.count; i++) {
+            const x = horAttr.getX(i), z = horAttr.getZ(i);
+            const c = (x + offsetX) / spacingX, r = (z + offsetY) / spacingY;
+            horAttr.setY(i, getComputedHeight(r, c, rows, cols, state.mapSeed, 'mountains') - 0.15);
+        }
+        horizonGeo.computeVertexNormals();
+        const horizonMesh = new THREE.Mesh(horizonGeo, groundMat);
+        scene.add(horizonMesh);
+        if (!window.environmentObjects) window.environmentObjects = [];
+        window.environmentObjects.push(horizonMesh);
+
+        const skirtBaseY = -12;
+        const skirtGeo = new THREE.BufferGeometry();
+        const skirtVerts = [];
+        const skirtUVs = [];
+        const wSeg = 128; const hSeg = 128;
+        const wVerts = wSeg + 1;
+
+        const addSkirtQuad = (idx1, idx2, u1, u2) => {
+            const x1 = posAttr.getX(idx1), y1 = posAttr.getY(idx1), z1 = posAttr.getZ(idx1);
+            const x2 = posAttr.getX(idx2), y2 = posAttr.getY(idx2), z2 = posAttr.getZ(idx2);
+            skirtVerts.push(x1, y1, z1, x1, skirtBaseY, z1, x2, skirtBaseY, z2);
+            skirtUVs.push(u1, 1, u1, 0, u2, 0);
+            skirtVerts.push(x1, y1, z1, x2, skirtBaseY, z2, x2, y2, z2);
+            skirtUVs.push(u1, 1, u2, 0, u2, 1);
+        };
+
+        for (let i = 0; i < wSeg; i++) addSkirtQuad(i, i + 1, i / wSeg, (i + 1) / wSeg);
+        const startBot = hSeg * wVerts;
+        for (let i = 0; i < wSeg; i++) addSkirtQuad(startBot + i + 1, startBot + i, (i + 1) / wSeg, i / wSeg);
+        for (let i = 0; i < hSeg; i++) {
+            const idx1 = (i + 1) * wVerts;
+            const idx2 = i * wVerts;
+            addSkirtQuad(idx1, idx2, (i + 1) / hSeg, i / hSeg);
+        }
+        for (let i = 0; i < hSeg; i++) {
+            const idx1 = i * wVerts + wSeg;
+            const idx2 = (i + 1) * wVerts + wSeg;
+            addSkirtQuad(idx1, idx2, i / hSeg, (i + 1) / hSeg);
+        }
+
+        skirtGeo.setAttribute('position', new THREE.Float32BufferAttribute(skirtVerts, 3));
+        skirtGeo.setAttribute('uv', new THREE.Float32BufferAttribute(skirtUVs, 2));
+        skirtGeo.computeVertexNormals();
+
+        const skirtMesh = new THREE.Mesh(skirtGeo, materials[0]);
+        terrainMesh.add(skirtMesh);
+
+        const waterColor = new THREE.Color(theme.colors.water);
+        const waterMat = new THREE.MeshStandardMaterial({
+            color: waterColor, transparent: true, opacity: theme.id === 'diablo' ? 0.9 : 0.8,
+            emissive: waterColor, emissiveIntensity: (theme.id === 'diablo' || theme.id === 'triviador') ? 1.0 : 0.1, // Reduced emissive for murkier water
+            roughness: 0.1, metalness: 0.8,
+            flatShading: false,
+            polygonOffset: true,
+            polygonOffsetFactor: 1,
+            polygonOffsetUnits: 1
+        });
+
+        waterMat.onBeforeCompile = (shader) => {
+            shader.uniforms.time = { value: 0 };
+            shader.uniforms.amplitude = { value: cfg.waveAmplitude };
+            shader.uniforms.speed = { value: cfg.waveSpeed };
+            state.waterUniforms = shader.uniforms;
+
+            shader.vertexShader = `
+                    uniform float time;
+                    uniform float amplitude;
+                    uniform float speed;
+                    varying float vWaveHeight;
+                ` + shader.vertexShader;
+
+            shader.vertexShader = shader.vertexShader.replace(
+                '#include <begin_vertex>',
+                `
+                    #include <begin_vertex>
+                    float t = time * speed;
+                    float wave = abs(sin(position.x * 0.2 + t)) * amplitude +
+                                 abs(cos(position.y * 0.2 + t * 0.8)) * amplitude +
+                                 sin(position.x * 0.5 + position.y * 0.5 + t * 1.5) * (amplitude * 0.2);
+                    transformed.z += wave;
+                    vWaveHeight = wave;
+                    `
+            );
+
+            shader.fragmentShader = `
+                    varying float vWaveHeight;
+                ` + shader.fragmentShader;
+
+            shader.fragmentShader = shader.fragmentShader.replace(
+                '#include <color_fragment>',
+                `
+                    #include <color_fragment>
+                    float foam = smoothstep(0.4, 0.9, vWaveHeight);
+                    vec3 foamColor = vec3(0.9, 0.98, 1.0);
+                    diffuseColor.rgb = mix(diffuseColor.rgb, foamColor, foam * 0.8);
+                    `
+            );
+        };
+
+        const waterPlane = new THREE.Mesh(new THREE.PlaneGeometry(15000, 15000, 96, 96), waterMat);
+        waterPlane.rotateX(-Math.PI / 2);
+        waterPlane.position.y = cfg.waterHeight;
+        scene.add(waterPlane);
+        if (!window.environmentObjects) window.environmentObjects = [];
+        window.environmentObjects.push(waterPlane);
+
+        const sunColor = new THREE.Color(theme.colors.sun);
+        // Made the sun much larger and pushed it back to be majestic
+        const sunGeo = new THREE.SphereGeometry(150, 32, 32);
+
+        function resolveAssetGeometry(type, ownerId = null) {
+            if (ownerId && state.playerSkins[ownerId]) {
+                const skin = state.playerSkins[ownerId];
+                if (type === 'castle' && skin.castle) return buildVoxelMesh(skin.castle, 0.4);
+            }
+
+            try {
+                if (type === 'tree' && assets.tree && assets.tree.length > 0) return assets.tree[Math.floor(Math.random() * assets.tree.length)].geometry.clone().scale(1.5, 1.5, 1.5);
+                if (type === 'rock' && assets.rock && assets.rock.length > 0) return assets.rock[Math.floor(Math.random() * assets.rock.length)].geometry.clone().scale(1.2, 1.2, 1.2);
+                if (type === 'house' && assets.house && assets.house.length > 0) return assets.house[Math.floor(Math.random() * assets.house.length)].geometry.clone().scale(1.8, 1.8, 1.8);
+                if (type === 'castle' && assets.castle && assets.castle.length > 0) return assets.castle[Math.floor(Math.random() * assets.castle.length)].geometry.clone().scale(2.5, 2.5, 2.5);
+            } catch(e) { console.error(e); }
+
+            return buildPrototype(type);
+        }
+
+        function buildVoxelMesh(gridData, scale = 1) {
+            const scaleRes = 0.06 * scale;
+            const geometries = [];
+            const offset = -4 * scaleRes;
+
+            for (let y = 0; y < gridData.length; y++) {
+                for (let z = 0; z < 8; z++) {
+                    for (let x = 0; x < 8; x++) {
+                        if (gridData[y] && gridData[y][z] && gridData[y][z][x]) {
+                            const box = new THREE.BoxGeometry(scaleRes, scaleRes, scaleRes);
+                            box.translate(
+                                (x * scaleRes) + offset + scaleRes / 2,
+                                (y * scaleRes) + scaleRes / 2,
+                                (z * scaleRes) + offset + scaleRes / 2
+                            );
+                            geometries.push(box);
+                        }
+                    }
+                }
+            }
+            if (geometries.length === 0) return new THREE.BoxGeometry(0.1, 0.1, 0.1);
+            return THREE.BufferGeometryUtils.mergeBufferGeometries(geometries);
+        }
+        const sunMat = new THREE.MeshBasicMaterial({ color: sunColor });
+        const sun = new THREE.Mesh(sunGeo, sunMat);
+
+        const sunGlowGeo = new THREE.SphereGeometry(250, 32, 32);
+        const sunGlowMat = new THREE.MeshBasicMaterial({ color: sunColor, transparent: true, opacity: 0.2 });
+        const sunGlow = new THREE.Mesh(sunGlowGeo, sunGlowMat);
+        sun.add(sunGlow);
+
+        sun.position.set(3000, 1000, -3000);
+        scene.add(sun);
+        window.environmentObjects.push(sun);
+
+        const hexGeo = new THREE.CylinderGeometry(hexRadius * 0.96, hexRadius * 0.96, 0.1, 6);
+        const hexMat = groundMat.clone();
+        hexMat.transparent = true;
+        hexMat.opacity = 0.2;
+        const hexInstMesh = new THREE.InstancedMesh(hexGeo, hexMat, state.gridRows * state.gridCols);
+        hexInstMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        hexInstMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(state.gridRows * state.gridCols * 3), 3);
+        scene.add(hexInstMesh);
+        state.hexInstMesh = hexInstMesh;
+
+        const wallHeight = 0.8;
+        const wallWidth = hexRadius * 0.95;
+        const wallDepth = 0.15;
+        const wallGeo = buildWallGeometry(wallWidth, wallHeight, wallDepth);
+        // Medieval updated wall color
+        const wallMat = new THREE.MeshStandardMaterial({ color: theme.colors.castle, roughness: 0.6, metalness: 0.1, flatShading: true });
+        const wallInstMesh = new THREE.InstancedMesh(wallGeo, wallMat, state.gridRows * state.gridCols * 6);
+        wallInstMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        wallInstMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(state.gridRows * state.gridCols * 6 * 3), 3);
+        scene.add(wallInstMesh);
+        state.wallInstMesh = wallInstMesh;
+
+        const natureMats = {
+            trunk: new THREE.MeshStandardMaterial({ color: theme.colors.trunk }),
+            foliage: new THREE.MeshStandardMaterial({ color: theme.colors.foliage }),
+            rock: new THREE.MeshStandardMaterial({ color: theme.colors.rock }),
+            castle: new THREE.MeshStandardMaterial({ color: theme.colors.castle }),
+            house: new THREE.MeshStandardMaterial({ color: theme.colors.house, roughness: 1.0 })
+        };
+        const instNature = {
+            tree: new THREE.InstancedMesh(resolveAssetGeometry('tree'), natureMats.foliage, 5000),
+            rock: new THREE.InstancedMesh(resolveAssetGeometry('rock'), natureMats.rock, 3000),
+            bush: new THREE.InstancedMesh(resolveAssetGeometry('bush'), natureMats.foliage, 3000),
+            house: new THREE.InstancedMesh(resolveAssetGeometry('house'), natureMats.house, 4000), // Added houses
+            mTree: new THREE.InstancedMesh(resolveAssetGeometry('tree'), natureMats.foliage, 8000)
+        };
+
+        Object.values(instNature).forEach(m => scene.add(m));
+        window.instNature = instNature;
+        window.baseToCastleIdx = new Map();
+        window.baseModels = new Map();
+        let natureCounts = { tree: 0, rock: 0, bush: 0, house: 0, mTree: 0 };
+
+        let hexIdx = 0;
+        const dummy = new THREE.Object3D();
+
+        // Find all base positions to cluster houses around them
+        const basePositions = [];
+        state.grid.forEach((row, r) => {
+            row.forEach((cell, c) => {
+                if (cell.active && cell.base) {
+                    basePositions.push({r, c});
+                }
+            });
+        });
+
+        state.grid.forEach((row, r) => {
+            row.forEach((cell, c) => {
+                if (!cell.active) return;
+                const x = (c * spacingX) + (r % 2 !== 0 ? spacingX / 2 : 0) - offsetX;
+                const z = (r * spacingY) - offsetY;
+                const tr = (z + offsetY) / spacingY;
+                const tc = (x + offsetX) / spacingX;
+                const h = getH(tr, tc);
+                const normal = getNormal(tr, tc);
+
+                dummy.position.set(x, h + 0.1, z);
+                dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
+                const qRot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 6 + Math.PI / 2);
+                dummy.quaternion.multiply(qRot);
+
+                if (h >= 0.1) {
+                    dummy.scale.setScalar(1);
+                    dummy.updateMatrix();
+                    hexInstMesh.setMatrixAt(hexIdx, dummy.matrix);
+                } else {
+                    dummy.scale.setScalar(0);
+                    dummy.updateMatrix();
+                    hexInstMesh.setMatrixAt(hexIdx, dummy.matrix);
+                }
+
+                const meshProxy = { userData: { r, c, hexIdx } };
+                tileMeshes.push(meshProxy);
+                window.tileMap.set(`${r},${c}`, meshProxy);
+
+                if (cell.base && cell.owner) {
+                    const castleGeo = resolveAssetGeometry('castle', cell.owner);
+                    const mat = new THREE.MeshStandardMaterial({ color: theme.colors.castle });
+                    const mesh = new THREE.Mesh(castleGeo, mat);
+                    mesh.position.copy(dummy.position);
+                    mesh.quaternion.copy(dummy.quaternion);
+                    mesh.scale.setScalar(1.5);
+                    scene.add(mesh);
+                    if (!window.baseModels) window.baseModels = new Map();
+                    window.baseModels.set(`${r},${c}`, mesh);
+                } else if (cell.base) {
+                    const castleGeo = resolveAssetGeometry('castle');
+                    const mat = new THREE.MeshStandardMaterial({ color: theme.colors.castle });
+                    const mesh = new THREE.Mesh(castleGeo, mat);
+                    mesh.position.copy(dummy.position);
+                    mesh.quaternion.copy(dummy.quaternion);
+                    mesh.scale.setScalar(1.5);
+                    scene.add(mesh);
+                    if (!window.baseModels) window.baseModels = new Map();
+                    window.baseModels.set(`${r},${c}`, mesh);
+                }
+                hexIdx++;
+            });
+        });
+
+        function spawnNature(tx, tz, type = 'tree') {
+            const count = natureCounts[type];
+            if (!instNature[type] || count >= instNature[type].count) return;
+
+            const sampleTr = (tz + offsetY) / spacingY;
+            const sampleTc = (tx + offsetX) / spacingX;
+            const h = getH(sampleTr, sampleTc);
+            if (h < 0.35) return;
+
+            let s = 1.0;
+            if (type === 'tree') s = 0.5 + Math.random() * 0.5;
+            else if (type === 'rock') s = 0.3 + Math.random() * 0.4;
+            else if (type === 'bush') s = 0.2 + Math.random() * 0.3;
+
+            const normal = getNormal(sampleTr, sampleTc);
+            dummy.position.set(tx, h, tz);
+            dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal || new THREE.Vector3(0, 1, 0));
+            const randomRot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI * 2);
+            dummy.quaternion.multiply(randomRot);
+            dummy.scale.setScalar(s);
+            dummy.updateMatrix();
+
+            instNature[type].setMatrixAt(natureCounts[type]++, dummy.matrix);
+        };
+
+        const mapW = cols * spacingX;
+        const mapH = rows * spacingY;
+
+        // Dynamic scatter based on map area (increased density for kingdom feel)
+        const iterations = Math.floor(rows * cols * 12.0);
+        for (let i = 0; i < iterations; i++) {
+            const tx = (Math.random() - 0.5) * (mapW + 15);
+            const tz = (Math.random() - 0.5) * (mapH + 15);
+
+            const tr = Math.floor((tz + offsetY) / spacingY + 0.5);
+            const tc = Math.floor((tx + offsetX) / spacingX - (tr % 2 !== 0 ? 0.5 : 0) + 0.5);
+
+            const rand = Math.random();
+            let natureType = 'rock';
+            if (rand > 0.7) natureType = 'tree';
+            else if (rand > 0.4) natureType = 'house'; // Select house, but place only near bases
+            else if (rand > 0.2) natureType = 'bush';
+            else natureType = 'rock';
+
+            let place = false;
+            const inGrid = (tr >= 0 && tr < rows && tc >= 0 && tc < cols);
+
+            if (inGrid) {
+                const cell = state.grid[tr][tc];
+                if (cell && cell.active) {
+                    if (natureType === 'tree') {
+                        if (cell.isForest) place = (Math.random() > 0.2);
+                        else place = (Math.random() > 0.95);
+                    } else if (natureType === 'house') {
+                        // Villages cluster ONLY near bases/castles (within 1 to 3 hexes)
+                        let isNearBase = false;
+                        for (let b of basePositions) {
+                            let d = getHexDistance(b.r, b.c, tr, tc);
+                            if (d >= 1 && d <= 3) {
+                                isNearBase = true;
+                                break;
+                            }
+                        }
+
+                        // If it's near a base, place it. Slightly lower chance if in a forest.
+                        if (!cell.base && isNearBase) {
+                            place = cell.isForest ? (Math.random() > 0.8) : (Math.random() > 0.4);
+                        }
+                    } else {
+                        // Rocks & Bushes
+                        if (!cell.base) place = (Math.random() > 0.85);
+                    }
+                }
+            }
+
+            if (place) spawnNature(tx, tz, natureType);
+        }
+
+        const mCfg = state.terrainConfig;
+        let mTreeIdx = 0;
+        const mMaxDistance = 14000;
+        const mStep = 450;
+
+        for (let mx = -mMaxDistance; mx <= mMaxDistance; mx += mStep) {
+            for (let mz = -mMaxDistance; mz <= mMaxDistance; mz += mStep) {
+                const jx = mx + (Math.random() - 0.5) * mStep * 0.8;
+                const jz = mz + (Math.random() - 0.5) * mStep * 0.8;
+
+                const distSq = jx * jx + jz * jz;
+                if (distSq < mCfg.mountainThreshold * mCfg.mountainThreshold) continue;
+                if (distSq > mMaxDistance * mMaxDistance) continue;
+                if (mTreeIdx >= instNature.mTree.count) break;
+
+                const mc = (jx + offsetX) / spacingX;
+                const mr = (jz + offsetY) / spacingY;
+                const mh = getComputedHeight(mr, mc, rows, cols, state.mapSeed, 'mountains');
+
+                if (mh > mCfg.seabedHeight + 1.0) {
+                    const s = 25 + Math.random() * 25;
+                    dummy.position.set(jx, mh - 2, jz);
+                    dummy.rotation.set(0, Math.random() * Math.PI, 0);
+                    dummy.scale.setScalar(s);
+                    dummy.updateMatrix();
+                    instNature.mTree.setMatrixAt(mTreeIdx++, dummy.matrix);
+                }
+            }
+        }
+        natureCounts.mTree = mTreeIdx;
+
+        Object.values(instNature).forEach(m => {
+            m.instanceMatrix.needsUpdate = true;
+        });
+        state.hexInstMesh.instanceMatrix.needsUpdate = true;
+
+        state.hexInstMesh.count = hexIdx;
+        Object.keys(instNature).forEach(type => {
+            instNature[type].count = natureCounts[type];
+        });
+
+        updateBoard3D();
+
+        if (assets.knight) {
+            if (window.builderManager) {
+                scene.remove(window.builderManager.mesh);
+            }
+            window.builderManager = new BuilderManager();
+        } else if (!window.builderManager) {
+            window.builderManager = new BuilderManager();
+        }
+        fitCamera();
+    }
+
+    const assets = {
+        castle: [],
+        castleWall: [],
+        gridRows: 20,
+        gridCols: 20,
+        grid: [],
+        tree: [],
+        rock: [],
+        house: [],
+        knight: null
+    };
+
+    function loadAssets(callback) {
+        console.log("Loading Custom GLB Assets...");
+        const loader = new THREE.GLTFLoader();
+
+        loader.load('so_small_you_see_medievalfantasyassets (1).glb', function (gltf) {
+            console.log("GLB Loaded successfully!");
+            gltf.scene.traverse(function(child) {
+                if (child.isMesh) {
+                    // Normalize geometry size and center
+                    child.geometry.computeBoundingBox();
+                    const box = child.geometry.boundingBox;
+                    const center = new THREE.Vector3();
+                    box.getCenter(center);
+                    child.geometry.translate(-center.x, -box.min.y, -center.z);
+
+                    const maxDim = Math.max(box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z);
+                    if (maxDim > 0) {
+                        child.geometry.scale(1/maxDim, 1/maxDim, 1/maxDim);
+                    }
+
+                    const name = child.name.toLowerCase();
+                    if (name.includes('tree') || name.includes('pine') || name.includes('wood')) assets.tree.push(child);
+                    else if (name.includes('house') || name.includes('hut') || name.includes('farm')) assets.house.push(child);
+                    else if (name.includes('castle') || name.includes('keep') || name.includes('tower') || name.includes('fort')) assets.castle.push(child);
+                    else if (name.includes('wall')) assets.castleWall.push(child);
+                    else if (name.includes('knight') || name.includes('unit')) assets.knight = child;
+                    else assets.rock.push(child); // fallback to rock
+                }
+            });
+            if (callback) callback();
+        }, undefined, function (error) {
+            console.error("Failed to load GLB, falling back to procedural assets.", error);
+            if (callback) callback();
+        });
+    }
+
+    function getModelClone(type) {
+        if (type === 'tree' && assets.tree.length > 0) {
+            const t = assets.tree[Math.floor(Math.random() * assets.tree.length)];
+            return t.clone();
+        }
+        if (type === 'rock' && assets.rock.length > 0) {
+            const t = assets.rock[Math.floor(Math.random() * assets.rock.length)];
+            return t.clone();
+        }
+        return null;
+    }
+
+    function updateWalls() {
+        if (!state.wallInstMesh || !state.grid) return;
+        const wallDummy = new THREE.Object3D();
+        const { spacingX, spacingY, offsetX, offsetY, getH, getNormal, hexRadius, gridCols, gridRows } = state;
+        const theme = getTheme(); // get current theme
+
+        if (assets.castleWall && assets.castleWall.length > 0 && !state.usingGlbWall) {
+            state.wallInstMesh.geometry = assets.castleWall[0].geometry.clone();
+            state.usingGlbWall = true;
+        }
+
+        state.grid.forEach((row, r) => {
+            row.forEach((cell, c) => {
+                const x = (c * spacingX) + (r % 2 !== 0 ? spacingX / 2 : 0) - offsetX;
+                const z = (r * spacingY) - offsetY;
+                const owner = cell.owner;
+
+                const neighbors = (r % 2 !== 0) ? [
+                    { dr: 0, dc: 1 }, { dr: 1, dc: 1 }, { dr: 1, dc: 0 }, { dr: 0, dc: -1 }, { dr: -1, dc: 0 }, { dr: -1, dc: 1 }
+                ] : [
+                    { dr: 0, dc: 1 }, { dr: 1, dc: 0 }, { dr: 1, dc: -1 }, { dr: 0, dc: -1 }, { dr: -1, dc: -1 }, { dr: -1, dc: 0 }
+                ];
+
+                for (let i = 0; i < 6; i++) {
+                    const nPos = neighbors[i];
+                    const nr = r + nPos.dr; const nc = c + nPos.dc;
+                    let isBoundary = false;
+                    if (owner) {
+                        if (nr < 0 || nr >= gridRows || nc < 0 || nc >= gridCols) isBoundary = true;
+                        else {
+                            const nCell = state.grid[nr][nc];
+                            if (!nCell || !nCell.active || nCell.owner !== owner) isBoundary = true;
+                        }
+                    }
+
+                    const idx = (r * gridCols + c) * 6 + i;
+                    if (isBoundary) {
+                        const angle = (i * 60) * (Math.PI / 180);
+                        const dist = hexRadius * 0.866 * 0.92;
+                        const wx = x + Math.cos(angle) * dist;
+                        const wz = z + Math.sin(angle) * dist;
+                        const wh = getH((wz + offsetY) / spacingY, (wx + offsetX) / spacingX);
+
+                        wallDummy.position.set(wx, wh - 0.1, wz);
+                        wallDummy.scale.set(1, 1, 1);
+                        const normal = getNormal((wz + offsetY) / spacingY, (wx + offsetX) / spacingX);
+                        const dir = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
+                        const wallTangent = new THREE.Vector3().crossVectors(normal, dir).normalize();
+                        const wallNormal = normal;
+                        const wallBinormal = new THREE.Vector3().crossVectors(wallTangent, wallNormal);
+                        const m = new THREE.Matrix4().makeBasis(wallTangent, wallNormal, wallBinormal);
+
+                        wallDummy.quaternion.setFromRotationMatrix(m);
+                        wallDummy.updateMatrix();
+                        state.wallInstMesh.setMatrixAt(idx, wallDummy.matrix);
+                        const p = state.players.find(p => p.id === owner);
+                        state.wallInstMesh.setColorAt(idx, p ? new THREE.Color(p.color) : new THREE.Color(theme.colors.castle));
+                    } else {
+                        wallDummy.scale.set(0, 0, 0);
+                        wallDummy.updateMatrix();
+                        state.wallInstMesh.setMatrixAt(idx, wallDummy.matrix);
+                    }
+                }
+            });
+        });
+
+        state.wallInstMesh.instanceMatrix.needsUpdate = true;
+        state.wallInstMesh.instanceColor.needsUpdate = true;
+    }
+
+
+    function updateBoard3D(targetMesh = null) {
+        if (tileMeshes.length === 0 || !state.hexInstMesh) return;
+
+        if (!window.cachedValidMoves) window.cachedValidMoves = new Set();
+
+        if (!targetMesh) {
+            window.cachedValidMoves.clear();
+            if (state.phase === 'planning') {
+                getValidMoves(state.myId, state.grid).forEach(m => window.cachedValidMoves.add(`${m.r},${m.c}`));
+            }
+        }
+
+        state.battleIcons = [];
+        if (state.phase === 'resolution' && !targetMesh) {
+            Object.keys(state.roundMoves).forEach(pid => {
+                const move = state.roundMoves[pid];
+                const attacker = state.players.find(p => p.id === pid);
+                const mesh = window.tileMap ? window.tileMap.get(`${move.r},${move.c}`) : null;
+                if (mesh) state.battleIcons.push({ mesh, color: attacker.color });
+            });
+        }
+
+        const theme = getTheme();
+        const colorTop = new THREE.Color(theme.colors.groundTop);
+
+        const updateInst = (mesh) => {
+            const { r, c, hexIdx } = mesh.userData;
+            const cell = state.grid[r][c];
+
+            const isOwned = !!(cell.owner && state.phase !== 'start');
+            const isValid = window.cachedValidMoves.has(`${r},${c}`) && state.phase === 'planning';
+
+            let targetColor = colorTop.clone();
+            if (isOwned) {
+                const ownerObj = state.players.find(p => p.id === cell.owner);
+                if (ownerObj) targetColor = new THREE.Color(ownerObj.color);
+            } else {
+                let basePos = null;
+                state.grid.forEach((row, ri) => row.forEach((c2, ci) => {
+                    if (c2.owner === state.myId && c2.base) basePos = { r: ri, c: ci };
+                }));
+
+                if (basePos && state.radiusMapping.length > 0) {
+                    let dist = getHexDistance(basePos.r, basePos.c, r, c);
+                    const max = state.radiusMapping[state.radiusMapping.length - 1].maxDist;
+                    if (dist > max) dist = ((dist - 1) % max) + 1;
+
+                    let ruleIdx = state.radiusMapping.findIndex(m => dist <= m.maxDist);
+                    if (ruleIdx === -1) ruleIdx = state.radiusMapping.length - 1;
+
+                    const zoneColor = new THREE.Color().setHSL((ruleIdx * 55) % 360 / 360, 0.6, 0.4);
+                    targetColor.lerp(zoneColor, 0.25);
+                }
+
+                if (isValid) targetColor.addScalar(0.2);
+            }
+
+            if (mesh === state.hoveredTile) {
+                targetColor.addScalar(0.2);
+            }
+
+            const myMove = state.roundMoves ? state.roundMoves[state.myId] : null;
+            if ((state.phase === 'planning' || state.phase === 'question') && myMove) {
+                if (myMove.r === r && myMove.c === c) {
+                    targetColor.setHex(0x000000);
+                }
+            }
+
+            state.hexInstMesh.setColorAt(hexIdx, targetColor);
+
+            if (window.baseModels) {
+                const model = window.baseModels.get(`${r},${c}`);
+                if (model) {
+                    if (cell.base) {
+                        model.visible = true;
+                        model.traverse((child) => {
+                            if (child.isMesh && child.material) {
+                                if (!child.userData.matCloned) {
+                                    child.material = child.material.clone();
+                                    child.userData.matCloned = true;
+                                }
+                                child.material.color.copy(targetColor);
+                            }
+                        });
+                    } else {
+                        model.visible = false;
+                    }
+                }
+            }
+        };
+
+        if (targetMesh) {
+            updateInst(targetMesh);
+        } else {
+            tileMeshes.forEach(updateInst);
+            updateWalls();
+        }
+        state.hexInstMesh.instanceColor.needsUpdate = true;
+    }
+
+    // --- MINIMAP LOGIC ---
+    function updateMinimap() {
+        const canvas = document.getElementById('minimap-canvas');
+        if (!canvas || !state.grid) return;
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        const hexRadius = 1;
+        const spacingX = hexRadius * Math.sqrt(3);
+        const spacingY = hexRadius * 1.5;
+        const mapW = state.gridCols * spacingX;
+        const mapH = state.gridRows * spacingY;
+
+        const padding = 20;
+        const scaleX = (w - padding * 2) / mapW;
+        const scaleY = (h - padding * 2) / mapH;
+        const scale = Math.min(scaleX, scaleY);
+
+        const cx = w / 2;
+        const cy = h / 2;
+
+        const w2m = (x, z) => ({
+            x: cx + x * scale,
+            y: cy + z * scale
+        });
+
+        const offsetX = (state.gridCols * spacingX) / 2;
+        const offsetY = (state.gridRows * spacingY) / 2;
+
+        state.grid.forEach((row, r) => {
+            row.forEach((cell, c) => {
+                if (!cell.active) return;
+                const wx = (c * spacingX) + (r % 2 !== 0 ? spacingX / 2 : 0) - offsetX;
+                const wz = (r * spacingY) - offsetY;
+
+                const p = w2m(wx, wz);
+
+                let color = '#334155';
+                if (cell.owner) {
+                    const player = state.players.find(pl => pl.id === cell.owner);
+                    if (player) color = player.color;
+                }
+
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, scale * 0.8, 0, Math.PI * 2);
+                ctx.fill();
+
+                if (cell.base && cell.owner === state.myId) {
+                    const time = Date.now() / 1500;
+                    const radius = (time % 1) * 20;
+                    const alpha = 1 - (time % 1);
+
+                    ctx.strokeStyle = `rgba(217, 119, 6, ${alpha})`; // Amber ping
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+                    ctx.stroke();
+
+                    ctx.fillStyle = '#fcd34d';
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            });
+        });
+
+        const corners = [
+            new THREE.Vector3(-1, 1, 0.5),
+            new THREE.Vector3(1, 1, 0.5),
+            new THREE.Vector3(1, -1, 0.5),
+            new THREE.Vector3(-1, -1, 0.5)
+        ];
+
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        ctx.beginPath();
+        let started = false;
+
+        corners.forEach((ndc) => {
+            raycaster.setFromCamera(ndc, camera);
+            const target = new THREE.Vector3();
+            const hit = raycaster.ray.intersectPlane(plane, target);
+            if (hit) {
+                const p = w2m(target.x, target.z);
+                if (!started) { ctx.moveTo(p.x, p.y); started = true; }
+                else ctx.lineTo(p.x, p.y);
+            }
+        });
+
+        if (started) {
+            ctx.closePath();
+            ctx.strokeStyle = 'rgba(180, 83, 9, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.fillStyle = 'rgba(180, 83, 9, 0.05)';
+            ctx.fill();
+        }
+    }
+    function animate() {
+        requestAnimationFrame(animate);
+
+        const delta = clock.getDelta();
+        const now = Date.now();
+        const time = clock.getElapsedTime();
+
+        controls.update();
+        updateMinimap();
+
+        if (state.waterUniforms) {
+            state.waterUniforms.time.value = time;
+        }
+
+        updateHUDTimers();
+
+        if (state.timerEnd) {
+            state.planningTime = Math.max(0, (state.timerEnd - now) / 1000);
+        } else if (state.phase === 'planning' || state.phase === 'question') {
+            state.planningTime = Math.max(0, state.planningTime - delta);
+        }
+
+        if (state.isHost && state.phase === 'planning') {
+            if (state.planningTime <= 0) {
+                state.planningTime = 0;
+                state.timerEnd = 0;
+                state.players.forEach(p => {
+                    if (!state.roundMoves[p.id]) {
+                        const moves = getValidMoves(p.id, state.grid);
+                        if (moves.length > 0) handlePlayerSelect(moves[0].r, moves[0].c, p.id);
+                    }
+                });
+                if (state.phase === 'planning') triggerQuestion();
+            }
+
+            const curSec = Math.floor(state.planningTime);
+            if (curSec !== state.lastSyncedTime) {
+                state.lastSyncedTime = curSec;
+                network.broadcast({ type: 'TIMER_SYNC', timerEnd: state.timerEnd });
+            }
+        }
+
+        const target = getTargetHex(mouse);
+        if (target) {
+            if (state.hoveredTile !== target) {
+                const old = state.hoveredTile;
+                state.hoveredTile = target;
+                if (old) updateBoard3D(old);
+                updateBoard3D(target);
+            }
+        } else if (state.hoveredTile) {
+            const old = state.hoveredTile;
+            state.hoveredTile = null;
+            updateBoard3D(old);
+        }
+
+        if (window.builderManager) window.builderManager.update(delta);
+        if (window.grassSystem) window.grassSystem.update(time);
+
+        raycaster.setFromCamera(mouse, camera);
+
+        syncBattleIcons();
+        renderer.render(scene, camera);
+    }
+
+    function syncBattleIcons() {
+        const container = document.getElementById('ui-layer');
+        const oldIcons = document.querySelectorAll('.battle-icon');
+        oldIcons.forEach(el => el.remove());
+        if (!state.hexInstMesh) return;
+
+        const mat4 = new THREE.Matrix4();
+        state.battleIcons.forEach(iconData => {
+            const { hexIdx } = iconData.mesh.userData;
+            state.hexInstMesh.getMatrixAt(hexIdx, mat4);
+            const pos = new THREE.Vector3().setFromMatrixPosition(mat4);
+            pos.y += 2;
+            pos.project(camera);
+
+            const x = (pos.x * .5 + .5) * window.innerWidth;
+            const y = (pos.y * -.5 + .5) * window.innerHeight;
+
+            if (pos.z < 1 && x > 0 && x < window.innerWidth && y > 0 && y < window.innerHeight) {
+                const el = document.createElement('div');
+                el.className = 'battle-icon text-4xl';
+                el.style.left = `${x} px`; el.style.top = `${y} px`; el.style.color = iconData.color;
+                el.innerHTML = '⚔️';
+                container.appendChild(el);
+            }
+        });
+    }
+
+
+    function resetEditorMap(r, c) {
+        state.gridRows = r; state.gridCols = c;
+        state.customMap = Array(r).fill().map(() => Array(c).fill(true));
+        state.grid = state.customMap.map(row => row.map(active => ({ active, terrainHeight: 1 })));
+        initBoard(); renderUI();
+    }
+
+    function toggleEditorCell(r, c) {
+        state.customMap[r][c] = !state.customMap[r][c];
+        state.grid = state.customMap.map(row => row.map(active => ({ active, terrainHeight: 1 })));
+        initBoard(); renderUI();
+    }
+
+    function loadPresetMap() {
+        const preset = BULGARIA_MAP.map(row => row.map(cell => cell === 1));
+        state.customMap = preset;
+        state.gridRows = preset.length;
+        state.gridCols = preset[0].length;
+        state.grid = state.customMap.map(row => row.map(active => ({ active, terrainHeight: 1 })));
+        initBoard();
+        renderUI();
+    }
+
+    function initGame() {
+        if (state.customMap.length === 0) {
+            state.customMap = Array(state.gridRows).fill().map(() => Array(state.gridCols).fill(true));
+        }
+        state.questionsDeck = [...state.questions].sort(() => Math.random() - 0.5);
+        if (state.questionsDeck.length === 0) return alert("Добави въпроси!");
+
+        state.usedQuestionIds = new Set();
+        state.mapSeed = Math.random() * 100;
+        state.grid = state.customMap.map((row, r) => row.map((active, c) => {
+            if (!active) return { owner: null, base: false, active: false, terrainHeight: 0 };
+            const h = getComputedHeight(r, c, state.gridRows, state.gridCols, state.mapSeed);
+            const isLand = h >= 0.1;
+            return {
+                owner: null, base: false, active: isLand && active,
+                variant: 'default', terrainHeight: h, isForest: isLand && Math.random() > 0.8
+            };
+        }));
+
+        let validCells = [];
+        state.grid.forEach((r, ri) => r.forEach((c, ci) => {
+            if (c.active && !c.isForest) validCells.push({ r: ri, c: ci });
+        }));
+        const shuffled = [...validCells].sort(() => Math.random() - 0.5);
+
+        state.players.forEach(p => {
+            if (shuffled.length) {
+                const pos = shuffled.pop();
+                state.grid[pos.r][pos.c].owner = p.id;
+                state.grid[pos.r][pos.c].base = true;
+                state.grid[pos.r][pos.c].terrainHeight = 2;
+            }
+        });
+
+        state.scores = {};
+        state.allPlayerStats = {};
+        state.players.forEach(p => {
+            state.scores[p.id] = 1;
+            state.allPlayerStats[p.id] = { correct: 0, wrong: 0, bonus: 0 };
+        });
+        state.phase = 'planning';
+        state.phaseStartTime = Date.now();
+        state.currentRound = 1;
+        state.roundMoves = {};
+
+        if (state.isHost && state.isMultiplayer) {
+            state.planningTime = 30;
+            network.socket.emit("start_timer", { duration: 30, phase: 'planning' });
+        } else {
+            state.planningTime = 30;
+            state.timerEnd = Date.now() + 30000;
+        }
+
+        initBoard();
+
+        state.roundMoves = {};
+        state.isSelecting = false;
+        state.phaseStartTime = Date.now();
+
+        state.blockInput = true;
+        setTimeout(() => { state.blockInput = false; }, 500);
+
+        renderUI();
+    }
+
+    function getValidMoves(pid, currentGrid) {
+        const myCells = [];
+        currentGrid.forEach((row, ri) => row.forEach((cell, ci) => { if (cell.active && cell.owner === pid) myCells.push({ r: ri, c: ci }) }));
+
+        if (myCells.length === 0) {
+            const results = [];
+            currentGrid.forEach((row, ri) => row.forEach((cell, ci) => {
+                if (cell.active && !cell.owner) results.push({ r: ri, c: ci });
+            }));
+            return results;
+        }
+
+        const moves = new Set();
+        myCells.forEach(cell => {
+            getNeighbors(cell.r, cell.c, state.gridRows, state.gridCols).forEach(n => {
+                if (currentGrid[n.r][n.c].active && currentGrid[n.r][n.c].owner !== pid) {
+                    moves.add(`${n.r},${n.c}`);
+                }
+            });
+        });
+        return Array.from(moves).map(s => {
+            const p = s.split(',');
+            return { r: parseInt(p[0]), c: parseInt(p[1]) };
+        });
+    }
+
+    function getHexOffsets(r) {
+        return (r % 2 !== 0)
+            ? [[0, 1], [1, 1], [1, 0], [0, -1], [-1, 0], [-1, 1]]
+            : [[0, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0]];
+    }
+    function getNeighbors(r, c, rows, cols) {
+        return getHexOffsets(r).map(([dr, dc]) => ({ r: r + dr, c: c + dc }))
+            .filter(n => n.r >= 0 && n.r < rows && n.c >= 0 && n.c < cols);
+    }
+    function handlePlayerSelect(r, c, remotePid) {
+        const pid = remotePid || state.myId;
+        if (isEliminated() && pid === state.myId) return;
+        if (state.phase !== 'planning') {
+            if (pid === state.myId) state.isSelecting = false;
+            return;
+        }
+
+        if (pid === state.myId) {
+            if (state.blockInput) return;
+            if (state.isSelecting) return;
+        }
+
+        const validMoves = getValidMoves(pid, state.grid);
+        const isCoordValid = validMoves.some(m => m.r === r && m.c === c);
+
+        if (!isCoordValid) {
+            if (pid === state.myId) addLog("Твърде далеч! Избери съсед.");
+            return;
+        }
+
+        state.roundMoves[pid] = { r, c };
+        updateBoard3D();
+        renderUI();
+
+        if (state.isMultiplayer) {
+            if (state.isHost) {
+                processSelectTile(r, c, pid);
+            } else {
+                if (pid === state.myId) {
+                    state.isSelecting = true;
+                    network.sendToHost({ type: 'ACTION_SUBMIT', action: 'selectTile', r, c });
+                }
+            }
+        } else {
+            if (pid === state.myId) {
+                state.isSelecting = true;
+                state.players.slice(1).forEach(p => {
+                    const valid = getValidMoves(p.id, state.grid);
+                    if (valid.length) {
+                        state.roundMoves[p.id] = valid[Math.floor(Math.random() * valid.length)];
+                    }
+                });
+                triggerQuestion();
+            }
+        }
+    }
+
+    function processSelectTile(r, c, pid) {
+        state.roundMoves[pid] = { r, c };
+
+        if (state.isHost) {
+            const activePlayers = state.players.filter(p => !p.eliminated);
+            const movedCount = Object.keys(state.roundMoves).length;
+            if (movedCount >= activePlayers.length) {
+                triggerQuestion();
+                if (state.isMultiplayer) network.broadcast({ type: 'STATE_SYNC', state: network.getSyncData() });
+            }
+            renderUI();
+        }
+    }
+
+    function triggerQuestion() {
+        if (state.phase === 'question') return;
+        state.phase = 'question';
+        state.phaseStartTime = Date.now();
+        state.battleMsg = null;
+        state.roundResults = {};
+        state.hasAnsweredLocally = false;
+        state.selectedAnswerIdx = null;
+
+        if (state.isHost) {
+            network.socket.emit("start_timer", { duration: 30, phase: 'question' });
+        }
+
+        const p1Move = state.roundMoves[state.myId];
+        let questionsPool = [];
+
+        if (p1Move) {
+            let basePos = null;
+            state.grid.forEach((row, r) => row.forEach((cell, c) => {
+                if (cell.owner === state.myId && cell.base) basePos = { r, c };
+            }));
+
+            const mapping = state.radiusMapping.sort((a, b) => a.maxDist - b.maxDist);
+
+            if (basePos && mapping.length > 0) {
+                let dist = getHexDistance(basePos.r, basePos.c, p1Move.r, p1Move.c);
+
+                const maxDefinedDist = mapping[mapping.length - 1].maxDist;
+                if (dist > maxDefinedDist) {
+                    dist = ((dist - 1) % maxDefinedDist) + 1;
+                }
+
+                let startIndex = mapping.findIndex(m => dist <= m.maxDist);
+                if (startIndex === -1) startIndex = mapping.length - 1;
+
+                for (let i = startIndex; i < mapping.length; i++) {
+                    const folderId = mapping[i].folderId;
+                    const folderQs = state.questions.filter(q => q.folderId === folderId && !state.usedQuestionIds.has(q.id));
+                    if (folderQs.length > 0) {
+                        questionsPool = folderQs;
+                        break;
+                    }
+                }
+
+                if (questionsPool.length === 0) {
+                    for (let i = 0; i < startIndex; i++) {
+                        const folderId = mapping[i].folderId;
+                        const folderQs = state.questions.filter(q => q.folderId === folderId && !state.usedQuestionIds.has(q.id));
+                        if (folderQs.length > 0) {
+                            questionsPool = folderQs;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (questionsPool.length === 0) {
+            questionsPool = state.questions.filter(q => !state.usedQuestionIds.has(q.id));
+        }
+        if (questionsPool.length === 0) {
+            addLog("Всички въпроси са изчерпани! Рестартиране.");
+            state.usedQuestionIds.clear();
+            questionsPool = state.questions;
+        }
+
+        let nextQ = questionsPool[Math.floor(Math.random() * questionsPool.length)];
+
+        state.usedQuestionIds.add(nextQ.id);
+
+        if (nextQ.type === 'matching') {
+            const indices = nextQ.pairs.map((_, i) => i);
+            state.matchingRightOrder = indices.sort(() => Math.random() - 0.5);
+        }
+        state.currentQuestion = nextQ;
+        state.matchPairsFound = [];
+        state.matchSelectedLeft = null;
+        state.phase = 'question';
+        renderUI();
+
+        if (state.isHost && state.isMultiplayer) {
+            network.broadcast({ type: 'STATE_SYNC', state: network.getSyncData() });
+        }
+    }
+    window.pickNextQuestion = triggerQuestion;
+
+
+    function handleMatchingClick(side, index) {
+        if (side === 'left') {
+            if (state.matchPairsFound.includes(index)) return;
+            state.matchSelectedLeft = (state.matchSelectedLeft === index) ? null : index;
+        } else {
+            if (state.matchPairsFound.includes(index)) return;
+            if (state.matchSelectedLeft !== null) {
+                if (state.matchSelectedLeft === index) {
+                    state.matchPairsFound.push(index);
+                    state.matchSelectedLeft = null;
+                    if (state.matchPairsFound.length === state.currentQuestion.pairs.length) {
+
+                    }
+                } else {
+                    window.handleAnswer(false);
+                    state.matchSelectedLeft = null;
+                }
+            }
+        }
+        renderUI();
+    }
+
+    function handleAnswer(answer, remotePid) {
+        const pid = remotePid || state.myId;
+        if (isEliminated() && pid === state.myId) return;
+
+        if (pid === state.myId && Date.now() - state.phaseStartTime < 1000) return;
+
+        if (state.isHost) {
+            if (state.roundResults && state.roundResults[pid] !== undefined) return;
+        } else if (pid === state.myId && state.hasAnsweredLocally) return;
+
+        if (state.isMultiplayer) {
+            if (state.isHost) {
+                processAnswer(answer, pid);
+            } else {
+                state.hasAnsweredLocally = true;
+                network.sendToHost({ type: 'ACTION_SUBMIT', action: 'answer', answer });
+                renderUI();
+            }
+        } else {
+            processAnswer(answer, 'p1');
+        }
+    }
+
+    function processAnswer(answer, pid) {
+        let isCorrect = false;
+        const q = state.currentQuestion;
+        if (!q) return;
+
+        if (q.type === 'multiple' || q.type === 'image') isCorrect = answer === q.correct;
+        else if (q.type === 'open') isCorrect = answer?.toString().trim().toLowerCase() === q.correct.toString().trim().toLowerCase();
+        else if (q.type === 'matching') isCorrect = answer === true;
+
+        const speaker = state.players.find(p => p.id === pid);
+        addLog(`${speaker ? speaker.name : pid}: ${isCorrect ? 'ВЯРНО!' : 'ГРЕШКА!'} `);
+
+        if (pid === state.myId) {
+            if (isCorrect) state.playerStats.correct++;
+            else state.playerStats.wrong++;
+        }
+
+        if (state.isHost) {
+            if (!state.allPlayerStats) state.allPlayerStats = {};
+            state.players.forEach(pp => {
+                if (!state.allPlayerStats[pp.id]) state.allPlayerStats[pp.id] = { correct: 0, wrong: 0, bonus: 0 };
+            });
+
+            if (isCorrect) state.allPlayerStats[pid].correct++;
+            else state.allPlayerStats[pid].wrong++;
+
+            if (!state.roundResults) state.roundResults = {};
+            state.roundResults[pid] = isCorrect;
+
+            const movers = Object.keys(state.roundMoves);
+            const activePlayers = state.players.filter(p => !p.eliminated);
+            const activeMovers = movers.filter(id => activePlayers.some(p => p.id === id));
+
+            const answeredCount = activeMovers.filter(id => state.roundResults[id] !== undefined).length;
+            state.battleMsg = `ОТГОВОРИ: ${answeredCount} / ${activeMovers.length}`;
+
+            if (Object.keys(state.roundResults).length >= activeMovers.length) {
+                state.phase = 'resolution';
+                state.battleMsg = "РЕЗУЛТАТИ!";
+                if (state.isMultiplayer) network.broadcast({ type: 'STATE_SYNC', state: network.getSyncData() });
+                renderUI();
+
+                setTimeout(() => {
+                    state.battleMsg = null;
+                    executeMultiResolution(state.roundResults);
+                    state.roundResults = null;
+                    state.hasAnsweredLocally = false;
+                    if (state.isMultiplayer) network.broadcast({ type: 'STATE_SYNC', state: network.getSyncData() });
+                    renderUI();
+                }, 2000);
+            } else if (state.isMultiplayer) {
+                network.broadcast({ type: 'STATE_SYNC', state: network.getSyncData() });
+            }
+        }
+        renderUI();
+    }
+
+    function executeMultiResolution(results) {
+        const newGrid = state.grid;
+        const newScores = { ...state.scores };
+        const eliminatedIdx = new Set();
+        const entries = Object.entries(state.roundMoves);
+
+        entries.forEach(([pid, move]) => {
+            if (!results[pid]) return;
+            const target = newGrid[move.r][move.c];
+            if (target.base && target.owner && target.owner !== pid) {
+                const victimId = target.owner;
+                eliminatedIdx.add(victimId);
+                addLog(`${state.players.find(p => p.id === pid).name} превзе КРЕПОСТ!`);
+
+                if (victimId === state.myId) state.phase = 'gameover';
+
+                newGrid.forEach(row => row.forEach(cell => {
+                    if (cell.owner === victimId) {
+                        cell.owner = pid; cell.base = false;
+                        newScores[pid] = (newScores[pid] || 0) + 1;
+                        newScores[victimId] = (newScores[victimId] || 0) - 1;
+                    }
+                }));
+            }
+        });
+
+        entries.forEach(([pid, move]) => {
+            if (!results[pid] || eliminatedIdx.has(pid)) return;
+            const target = newGrid[move.r][move.c];
+            if (target.owner === pid) return;
+            if (target.owner) newScores[target.owner]--;
+            target.owner = pid;
+            newScores[pid]++;
+        });
+
+        entries.forEach(([pid, move]) => {
+            if (results[pid] && !eliminatedIdx.has(pid) && window.builderManager) {
+                window.builderManager.spawnBuilders([{ r: move.r, c: move.c }], pid);
+            }
+        });
+
+        state.scores = newScores;
+        state.battleMsg = null;
+        state.roundResults = {};
+        state.hasAnsweredLocally = false;
+
+        state.players.forEach(p => {
+            if (eliminatedIdx.has(p.id)) {
+                p.eliminated = true;
+                addLog(`${p.name} е елиминиран!`);
+            }
+        });
+
+        const winners = new Set(newGrid.flat().filter(c => c.base).map(c => c.owner).filter(o => !!o));
+        if (winners.size === 1) {
+            state.phase = 'victory';
+        } else {
+            state.phase = 'planning';
+            if (state.isHost) network.socket.emit("start_timer", { duration: 30, phase: 'planning' });
+            state.currentRound++;
+            state.roundMoves = {};
+            state.hasAnsweredLocally = false;
+            state.isSelecting = false;
+        }
+        updateBoard3D();
+    }
+
+    function resolveRound() {
+        const newGrid = state.grid;
+        const newScores = { ...state.scores };
+        const eliminatedIdx = new Set();
+
+        const moveResults = state.roundResults || {};
+
+        Object.keys(state.roundMoves).forEach(pid => {
+            if (moveResults[pid] === undefined) {
+                moveResults[pid] = false;
+            }
+        });
+
+        executeMultiResolution(moveResults);
+
+        state.players.forEach(p => {
+            if (eliminatedIdx.has(p.id)) {
+                p.eliminated = true;
+                addLog(`${p.name} е елиминиран!`);
+            }
+        });
+
+        if (state.phase === 'planning') {
+            state.phaseStartTime = Date.now();
+            state.isSelecting = false;
+            if (state.isHost && state.isMultiplayer) {
+                state.planningTime = 30;
+                state.timerEnd = 0;
+            } else if (!state.isMultiplayer) {
+                state.planningTime = 30;
+                state.timerEnd = Date.now() + 30000;
+            }
+        }
+
+        updateBoard3D();
+        renderUI();
+        if (state.isHost && state.isMultiplayer) {
+            network.broadcast({ type: 'STATE_SYNC', state: network.getSyncData() });
+        }
+    }
+
+    function flashTile(r, c, hexColor) {
+        const mesh = window.tileMap ? window.tileMap.get(`${r},${c} `) : null;
+        if (mesh && state.hexInstMesh) {
+            const hexIdx = mesh.userData.hexIdx;
+            const oldColor = new THREE.Color();
+            state.hexInstMesh.getColorAt(hexIdx, oldColor);
+            state.hexInstMesh.setColorAt(hexIdx, new THREE.Color(hexColor));
+            state.hexInstMesh.instanceColor.needsUpdate = true;
+            setTimeout(() => {
+                if (state.hexInstMesh) {
+                    state.hexInstMesh.setColorAt(hexIdx, oldColor);
+                    state.hexInstMesh.instanceColor.needsUpdate = true;
+                }
+            }, 500);
+        }
+    }
+
+    // --- RENDER UI ---
+    function renderUI() {
+        const ui = document.getElementById('ui-layer');
+        const theme = getTheme();
+        let html = '';
+
+        const isModalPhase = ['start', 'lobby', 'victory', 'question'].includes(state.phase) || state.showQuestionsEditor || state.showRadiusConfig;
+        if (isModalPhase) {
+            ui.style.pointerEvents = 'auto';
+        } else {
+            ui.style.pointerEvents = 'none';
+        }
+
+        if (state.phase === 'start') {
+            html = renderStartScreen(theme);
+            if (state.showQuestionsEditor) html += renderQuestionEditorModal(theme);
+            if (state.showRadiusConfig) html += renderRadiusConfigModal(theme);
+            if (state.showSkinEditor) html += renderSkinEditor(theme);
+            if (state.showAssetInspector) html += renderAssetInspector(theme);
+        } else if (state.phase === 'lobby') {
+            html = renderLobbyScreen(theme);
+        } else if (state.phase === 'victory') {
+            html = renderVictoryScreen(theme);
+        } else if (state.phase === 'gameover') {
+            html = renderGameOverScreen(theme);
+        } else if (state.phase === 'map_simulation') {
+            html = renderMapSimulationUI(theme);
+        } else {
+            html = `
+                    ${renderHUD(theme)}
+                    ${renderStatus(theme)}
+                    ${state.phase === 'question' ? renderQuestionModal(theme) : ''}
+                    ${state.battleMsg ? `<div class="absolute top-24 left-1/2 -translate-x-1/2 bg-stone-900/90 px-8 py-4 rounded-sm border-4 border-double border-amber-700 shadow-[0_0_30px_rgba(0,0,0,0.8)] z-50 pointer-events-auto"><span class="text-2xl font-black text-amber-500 tracking-widest drop-shadow-md">${state.battleMsg}</span></div>` : ''}
+                `;
+        }
+        ui.innerHTML = html;
+        lucide.createIcons();
+    }
+
+    // --- EDITOR LOGIC ---
+    function initNewQuestion() {
+        state.editingQ = { type: 'multiple', q: '', answers: ['', '', '', ''], correct: 0, image: '', pairs: [['', '']] };
+        renderUI();
+    }
+
+    function handleSaveQuestion() {
+        const q = state.editingQ;
+        if (!q.q) return alert("Въведи текст на въпроса!");
+        const existingIdx = state.questions.findIndex(eq => eq.id === q.id);
+        if (q.id && existingIdx !== -1) { state.questions[existingIdx] = q; }
+        else { state.questions.push({ ...q, id: Date.now() }); }
+        state.editingQ = null;
+        renderUI();
+    }
+
+    function handleDeleteQuestion(id) {
+        if (confirm("Сигурен ли си?")) {
+            state.questions = state.questions.filter(q => q.id !== id);
+            if (state.editingQ && state.editingQ.id === id) state.editingQ = null;
+            renderUI();
+        }
+    }
+
+    // --- WINDOW EXPORTS ---
+    window.initGame = initGame;
+    window.resetEditorMap = resetEditorMap;
+    window.loadPresetMap = loadPresetMap;
+    window.toggleEditorCell = toggleEditorCell;
+    window.handlePlayerSelect = handlePlayerSelect;
+    window.handleMatchingClick = handleMatchingClick;
+    window.handleAnswer = handleAnswer;
+    window.handleSaveQuestion = handleSaveQuestion;
+    window.initNewQuestion = initNewQuestion;
+    window.handleDeleteQuestion = handleDeleteQuestion;
+    // --- THEME ---
+    window.setTheme = (id) => {
+        state.currentThemeId = id;
+        if (state.isHost && state.isMultiplayer) {
+            network.broadcast({ type: 'STATE_SYNC', state: { currentThemeId: id } });
+        }
+        initBoard();
+        renderUI();
+    };
+    window.setPlayers = (n) => { state.targetPlayerCount = parseInt(n); renderUI(); };
+    // --- FOLDER & RADIUS HANDLERS ---
+    function updateRadiusMapping() {
+        state.radiusMapping = state.folders.map((f, i) => ({
+            maxDist: (i + 1) * 6,
+            folderId: f.id
+        }));
+    }
+
+    window.handleAddFolder = () => {
+        const name = prompt("Име на папката:");
+        if (name) {
+            const id = 'f_' + Date.now();
+            state.folders.push({ id, name });
+            state.currentFolderId = id;
+            updateRadiusMapping();
+            renderUI();
+        }
+    };
+
+    window.handleDeleteFolder = (id) => {
+        if (id === 'default') return alert("Не можеш да изтриеш основната папка!");
+        const confirmDelete = confirm("Изтриване на папката? Въпросите в нея ще бъдат преместени в 'Общи'.");
+        if (confirmDelete) {
+            state.questions.forEach(q => { if (q.folderId === id) q.folderId = 'default'; });
+            state.folders = state.folders.filter(f => f.id !== id);
+            if (state.currentFolderId === id) state.currentFolderId = 'default';
+            updateRadiusMapping();
+            renderUI();
+        }
+    };
+
+    window.handleAddRadiusRule = () => {
+        alert("Правилата се генерират автоматично спрямо папките (6 полета на папка). Добави нова папка, за да разшириш обхвата.");
+    };
+
+    window.handleDeleteRadiusRule = (idx) => {
+        alert("Правилата се генерират автоматично.");
+    };
+
+    window.handleUpdateRadiusRule = (idx, field, value) => {
+        if (field === 'maxDist') state.radiusMapping[idx].maxDist = parseInt(value) || 0;
+        if (field === 'folderId') state.radiusMapping[idx].folderId = value;
+        renderUI();
+    };
+
+    function renderRadiusConfigModal(theme) {
+        const sorted = [...state.radiusMapping].sort((a, b) => a.maxDist - b.maxDist);
+
+        return `<div class="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/90 backdrop-blur-sm p-4 pointer-events-auto">
+                    <div class="${theme.uiBg} p-6 w-full max-w-2xl flex flex-col overflow-hidden">
+                        <div class="flex justify-between items-center mb-6 pb-4 border-b border-amber-900/50">
+                            <h3 class="text-2xl font-bold flex items-center gap-3"><i data-lucide="settings" class="${theme.accent}"></i> Настройка на Радиус</h3>
+                            <button onclick="state.showRadiusConfig=false; renderUI()" class="hover:text-amber-400 transition-colors"><i data-lucide="x" class="w-8 h-8"></i></button>
+                        </div>
+
+                        <div class="flex-1 overflow-y-auto mb-4 p-2 bg-stone-950/50 border border-amber-900/30 rounded-sm space-y-2">
+                            <div class="grid grid-cols-12 gap-2 text-sm font-bold opacity-50 uppercase mb-2 px-2 text-amber-500">
+                                <div class="col-span-3">Макс. Радиус</div>
+                                <div class="col-span-1 text-center">-></div>
+                                <div class="col-span-7">Папка с Въпроси</div>
+                                <div class="col-span-1"></div>
+                            </div>
+                            ${sorted.map((rule, idx) => `
+                            <div class="grid grid-cols-12 gap-2 items-center bg-stone-800/50 border border-amber-900/30 p-2 rounded-sm">
+                                <div class="col-span-3">
+                                    <input type="number" value="${rule.maxDist}" onchange="window.handleUpdateRadiusRule(${state.radiusMapping.indexOf(rule)}, 'maxDist', this.value)" class="w-full ${theme.uiInputBg} border-2 ${theme.uiBorder} p-1 text-center">
+                                </div>
+                                <div class="col-span-1 text-center opacity-50 text-amber-500"><i data-lucide="arrow-right" class="w-4 h-4 mx-auto"></i></div>
+                                <div class="col-span-7">
+                                    <select onchange="window.handleUpdateRadiusRule(${state.radiusMapping.indexOf(rule)}, 'folderId', this.value)" class="w-full ${theme.uiInputBg} border-2 ${theme.uiBorder} p-1">
+                                        ${state.folders.map(f => `<option value="${f.id}" ${f.id === rule.folderId ? 'selected' : ''}>${f.name}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div class="col-span-1 flex justify-end">
+                                    <button onclick="window.handleDeleteRadiusRule(${state.radiusMapping.indexOf(rule)})" class="text-red-700 hover:text-red-500"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                                </div>
+                            </div>
+                        `).join('')}
+
+                            <button onclick="window.handleAddRadiusRule()" class="w-full py-2 border-2 border-dashed border-amber-800/50 text-amber-500 text-sm font-bold opacity-70 hover:opacity-100 hover:bg-amber-900/20 transition-all flex items-center justify-center gap-2">
+                                <i data-lucide="plus" class="w-4 h-4"></i> Добави Правило
+                            </button>
+                        </div>
+
+                        <div class="text-xs opacity-50 italic text-amber-400">
+                            * Системата АВТОМАТИЧНО генерира правилата спрямо твоите папки.
+                            Всяка следваща папка покрива следващите 6 полета (0-6, 7-12, и т.н.).
+                            Цикълът се повтаря след последната папка.
+                        </div>
+                    </div>
+            </div>`;
+    }
+
+    window.renderUI = renderUI;
+    window.render = renderUI;
+
+    function renderStartScreen(theme) {
+        return `
+                    <div class="fixed inset-0 w-full h-full ${theme.bgClass} ${theme.textClass} font-serif pointer-events-auto overflow-y-auto overflow-x-hidden" style="-webkit-overflow-scrolling: touch;">
+                        <div class="min-h-full flex flex-col items-center justify-center p-4 md:p-8">
+                            <div class="${theme.uiBg} p-6 md:p-10 shadow-[0_0_50px_rgba(0,0,0,0.8)] w-full max-w-lg text-center relative flex flex-col my-8 flex-shrink-0">
+                                <div class="flex items-center justify-center gap-3 mb-6 relative z-10">
+                                    <div class="${theme.accent}"><i data-lucide="${theme.icon}" class="w-10 h-10 drop-shadow-md"></i></div>
+                                    <h2 class="text-3xl md:text-4xl font-black uppercase tracking-widest text-amber-500 drop-shadow-[0_2px_2px_rgba(0,0,0,0.8)]">КРАЛСТВО 3D</h2>
+                                </div>
+
+                    <!-- Identity Section -->
+                                <div class="bg-stone-950/50 p-6 border-2 border-amber-900/50 mb-8 w-full max-w-lg mx-auto shadow-inner">
+                                    <h3 class="text-xs font-black uppercase tracking-[0.2em] text-amber-600 opacity-80 mb-4">Твоят Герб</h3>
+                                    <div class="flex flex-col md:flex-row gap-4">
+                                        <input id="player-name" type="text" placeholder="ИМЕ НА ГЕРОЯ"
+                                            value="${state.playerName || ''}"
+                                            oninput="state.playerName = this.value"
+                                            class="flex-1 ${theme.uiInputBg} border-2 ${theme.uiBorder} px-4 py-3 text-center font-bold outline-none focus:ring-2 ring-amber-500/50 shadow-inner">
+                                        <div class="relative w-full md:w-24 group">
+                                            <input id="player-color" type="color"
+                                                value="${state.playerColor}"
+                                                oninput="state.playerColor = this.value"
+                                                class="w-full h-12 cursor-pointer border-2 ${theme.uiBorder} bg-transparent appearance-none">
+                                            <div class="absolute inset-0 pointer-events-none flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <i data-lucide="palette" class="w-4 h-4 text-white drop-shadow-md"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="flex justify-center mb-0 relative z-10 w-full">
+                                    <!-- Only Multiplayer -->
+                                    <div class="bg-stone-950/50 p-8 border-2 border-amber-900/50 w-full max-w-lg shadow-inner">
+                                        <h3 class="text-xl font-bold mb-6 uppercase tracking-widest text-amber-500 drop-shadow-sm">Военна Кампания</h3>
+                                        <div class="flex flex-col gap-5">
+                                            <button onclick="if(!state.playerName){alert('Моля, въведете име!'); return;} network.init(true)" class="w-full py-4 ${theme.btnPrimary} font-black text-lg shadow-[0_0_15px_rgba(180,83,9,0.2)] transition-all hover:scale-[1.02] active:scale-95 uppercase tracking-widest">
+                                                СЪЗДАЙ ЗАЛА
+                                            </button>
+                                            <div class="relative flex items-center py-2">
+                                                <div class="flex-grow border-t border-amber-900/50"></div>
+                                                <span class="flex-shrink mx-4 text-xs font-black opacity-50 uppercase tracking-[0.3em] text-amber-600">ИЛИ</span>
+                                                <div class="flex-grow border-t border-amber-900/50"></div>
+                                            </div>
+                                            <div class="flex flex-col md:flex-row gap-2 md:gap-3">
+                                                <input id="room-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="КОД (ПЕЧАТ)"
+                                                    onkeydown="if(event.key==='Enter') { if(!state.playerName){alert('Име!'); return;} network.init(false, this.value.trim()); }"
+                                                    class="w-full md:flex-1 ${theme.uiInputBg} border-2 ${theme.uiBorder} px-4 py-3 text-center font-mono font-black tracking-[0.3em] outline-none focus:ring-2 ring-amber-500/50 shadow-inner">
+                                                <button onclick="if(!state.playerName){alert('Въведете име!'); return;} network.init(false, document.getElementById('room-input').value.trim())"
+                                                    class="w-full md:w-auto px-8 py-3 bg-stone-700 hover:bg-stone-600 text-amber-100 border border-amber-700/50 font-black transition-all hover:scale-[1.02] active:scale-95 uppercase tracking-widest shadow-md">
+                                                    ВЛЕЗ
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="flex justify-center mb-6 relative z-10 gap-4 mt-6">
+                                    <button onclick="state.showQuestionsEditor=true; renderUI()" class="px-5 py-2.5 ${theme.uiButtonSecondary} font-bold flex items-center gap-2 shadow-lg hover:scale-105 transition-transform text-sm"><i data-lucide="book" class="w-4 h-4"></i> Летописи (Въпроси)</button>
+                                    <button onclick="state.showRadiusConfig=true; renderUI()" class="px-5 py-2.5 ${theme.uiButtonSecondary} font-bold flex items-center gap-2 shadow-lg hover:scale-105 transition-transform text-sm"><i data-lucide="compass" class="w-4 h-4"></i> Обхват</button>
+                                </div>
+                                <div class="flex justify-center relative z-10 gap-4">
+                                    <button onclick="state.showSkinEditor=true; renderUI()" class="px-5 py-2.5 bg-stone-800 hover:bg-stone-700 border border-amber-900 text-amber-200 font-bold flex items-center gap-2 shadow-lg hover:scale-105 transition-transform text-sm"><i data-lucide="hammer" class="w-4 h-4"></i> Ковачница (Скин)</button>
+                                    <button onclick="enterMapSimulation()" class="px-5 py-2.5 bg-stone-800 hover:bg-stone-700 border border-amber-900 text-amber-200 font-bold flex items-center gap-2 shadow-lg hover:scale-105 transition-transform text-sm"><i data-lucide="map" class="w-4 h-4"></i> Карта</button>
+                                </div>
+
+                                <!-- Map Configuration -->
+                                <div class="bg-stone-950/50 p-6 border-2 border-amber-900/50 w-full max-w-lg mt-6 mx-auto shadow-inner relative overflow-hidden">
+                                    <h3 class="text-sm font-black uppercase tracking-[0.2em] text-amber-500 mb-6 flex items-center gap-2">
+                                        <i data-lucide="ruler" class="w-4 h-4 text-amber-700"></i>
+                                        Граници на Света
+                                    </h3>
+                                    <div class="space-y-6">
+                                        <div class="bg-stone-900 p-3 border border-amber-900/50 shadow-inner">
+                                            <div class="flex justify-between text-xs font-bold text-amber-600 mb-2 uppercase tracking-wide">
+                                                <span>Ширина (Колони)</span>
+                                                <span id="map-cols-val" class="text-amber-400 text-lg">${state.gridCols || 20}</span>
+                                            </div>
+                                            <input type="range" min="10" max="40" step="2" value="${state.gridCols || 20}"
+                                                oninput="state.gridCols = parseInt(this.value); document.getElementById('map-cols-val').innerText = this.value;"
+                                                class="w-full h-2 bg-stone-950 border border-amber-900/50 appearance-none cursor-pointer accent-amber-600">
+                                        </div>
+                                        <div class="bg-stone-900 p-3 border border-amber-900/50 shadow-inner">
+                                            <div class="flex justify-between text-xs font-bold text-amber-600 mb-2 uppercase tracking-wide">
+                                                <span>Височина (Редове)</span>
+                                                <span id="map-rows-val" class="text-amber-400 text-lg">${state.gridRows || 20}</span>
+                                            </div>
+                                            <input type="range" min="10" max="40" step="2" value="${state.gridRows || 20}"
+                                                oninput="state.gridRows = parseInt(this.value); document.getElementById('map-rows-val').innerText = this.value;"
+                                                class="w-full h-2 bg-stone-950 border border-amber-900/50 appearance-none cursor-pointer accent-amber-600">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+            </div> `;
+    }
+
+    function renderSkinEditor(theme) {
+        // Dynamic Levels
+        const grid = state.skinEditorGrid; // [y][z][x]
+
+        return `<div class="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/95 backdrop-blur-md p-2 md:p-4 pointer-events-auto">
+                    <div class="w-full max-w-6xl h-full md:h-[95vh] flex flex-col items-center bg-transparent">
+                        <div class="flex flex-col md:flex-row justify-between w-full items-center mb-2 md:mb-4 px-2 md:px-4 gap-2 border-b border-amber-900/50 pb-4">
+                            <h2 class="text-xl md:text-3xl font-black text-amber-500 uppercase tracking-widest text-center"><i data-lucide="hammer" class="inline w-8 h-8 mr-2"></i>Ковачница (8x8)</h2>
+                            <button onclick="window.addSkinLevel()" class="w-full md:w-auto px-4 py-2 bg-stone-800 border border-amber-700/50 font-bold text-amber-200 shadow-lg hover:bg-stone-700 transition-all flex items-center justify-center gap-2 text-sm md:text-base">
+                                <i data-lucide="plus-circle" class="w-5 h-5"></i> <span class="hidden md:inline">Добави Етаж</span><span class="md:hidden">Нов Етаж</span>
+                            </button>
+                        </div>
+
+                        <div class="flex-1 w-full overflow-y-auto p-2 md:p-4 bg-stone-900 border-2 border-amber-900/30 shadow-inner">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                                ${grid.map((layer, y) => `
+                                <div class="bg-stone-950 p-4 border border-amber-900/50 flex flex-col items-center relative shadow-[0_0_15px_rgba(0,0,0,0.5)]">
+                                    <h4 class="text-amber-500 font-bold mb-3 text-sm uppercase tracking-wide opacity-80">Ниво ${y + 1}</h4>
+                                    <button onclick="window.removeSkinLevel(${y})" class="absolute top-2 right-2 p-2 text-amber-700 hover:text-red-500 transition-colors bg-stone-900 active:bg-stone-800"><i data-lucide="trash" class="w-4 h-4"></i></button>
+
+                                    <!-- Aspect ratio square container -->
+                                    <div class="aspect-square w-full max-w-[200px] bg-stone-900 p-1 border border-amber-900/30">
+                                        <div class="grid grid-cols-8 gap-px w-full h-full">
+                                            ${layer.flat().map((val, idx) => {
+            const z = Math.floor(idx / 8);
+            const x = idx % 8;
+            return `<div onclick="window.toggleSkinVoxel(${y}, ${z}, ${x})" class="w-full h-full border-[0.5px] border-amber-900/20 cursor-pointer active:scale-95 transition-transform ${layer[z][x] ? 'bg-amber-600 shadow-[inset_0_0_8px_rgba(0,0,0,0.6)]' : 'bg-transparent hover:bg-stone-800'}"></div>`;
+        }).join('')}
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                            </div>
+                        </div>
+
+                        <div class="flex w-full md:w-auto gap-2 md:gap-4 mt-6 pb-4 px-2">
+                            <button onclick="state.showSkinEditor=false; renderUI()" class="flex-1 md:flex-none px-4 md:px-8 py-3 bg-stone-800 hover:bg-stone-700 text-amber-100 border border-amber-900 font-black text-sm md:text-xl shadow-xl uppercase tracking-wider">ОТКАЗ</button>
+                            <button onclick="window.saveMySkin()" class="flex-1 md:flex-none px-4 md:px-8 py-3 ${theme.btnPrimary} font-black text-sm md:text-xl shadow-xl transition-transform hover:scale-105 uppercase tracking-wider">ИЗКОВИ</button>
+                        </div>
+                    </div>
+            </div> `;
+    }
+
+    window.toggleSkinVoxel = (y, z, x) => {
+        if (state.skinEditorGrid[y] && state.skinEditorGrid[y][z]) {
+            state.skinEditorGrid[y][z][x] = state.skinEditorGrid[y][z][x] ? 0 : 1;
+            renderUI();
+        }
+    };
+
+    window.addSkinLevel = () => {
+        // Add new 8x8 empty layer
+        state.skinEditorGrid.push(Array(8).fill().map(() => Array(8).fill(0)));
+        renderUI();
+    };
+
+    window.removeSkinLevel = (index) => {
+        if (state.skinEditorGrid.length <= 1) return alert("Трябва да има поне един етаж!");
+        state.skinEditorGrid.splice(index, 1);
+        renderUI();
+    };
+
+    window.saveMySkin = () => {
+        // Construct payload
+        const skinData = {
+            castle: state.skinEditorGrid, // Raw 4x4x4 array
+            wall: null
+        };
+        state.myCustomSkin = skinData;
+        state.playerSkins[state.myId] = skinData; // Update local
+        state.showSkinEditor = false;
+
+        // Send network update
+        if (state.networkStatus === 'connected') {
+            if (state.isHost) {
+                network.broadcast({ type: 'SKIN_SYNC', skins: state.playerSkins });
+            } else {
+                network.sendToHost({ type: 'PLAYER_UPDATE', payload: { color: skinData } });
+            }
+        }
+        renderUI();
+    };
+
+    function renderLobbyScreen(theme) {
+        return `
+                    <div class="fixed inset-0 w-full h-full ${theme.bgClass} ${theme.textClass} flex flex-col items-center justify-center p-4 font-serif pointer-events-auto overflow-y-auto">
+                        <div class="${theme.uiBg} p-8 shadow-[0_0_50px_rgba(0,0,0,0.8)] w-full max-w-xl text-center border-4 border-double ${theme.uiBorder} relative overflow-hidden">
+
+                            <h2 class="text-4xl font-black mb-1 mt-4 tracking-tight text-amber-500 drop-shadow-md">ТАВЕРНА</h2>
+                            <p class="text-sm font-medium text-amber-700 mb-8 uppercase tracking-widest">Очакване на пълководци</p>
+
+                            <div class="bg-stone-950/80 border-2 border-amber-900/50 p-8 mb-8 shadow-inner relative">
+                                <p class="text-[10px] uppercase font-black text-amber-600/80 mb-2 tracking-[0.3em]">Царски Печат (Код)</p>
+                                <p class="text-5xl font-mono font-black tracking-[0.25em] text-amber-400 drop-shadow-sm">${state.roomCode || '...'}</p>
+                                ${state.isHost ? `
+                        <button onclick="navigator.clipboard.writeText('${state.roomCode}'); this.innerText='ВЗЕТО!'; setTimeout(()=>this.innerText='ВЗЕМИ ПЕЧАТА', 2000)"
+                                class="mt-6 px-8 py-2.5 bg-stone-800 border border-amber-700/50 text-amber-200 text-xs font-black uppercase tracking-widest transition-all hover:bg-stone-700 hover:scale-105 active:scale-95 shadow-lg shadow-amber-900/20">
+                            ВЗЕМИ ПЕЧАТА
+                        </button>` : ''}
+                            </div>
+
+                            <div class="flex items-center justify-between mb-4 border-b border-amber-900/30 pb-2">
+                                <span class="text-xs font-black text-amber-600/60 uppercase tracking-widest">Съюзници (${state.playersPending.length || 1})</span>
+                                <span class="flex h-2 w-2 rounded-full bg-amber-500 animate-pulse shadow-[0_0_10px_rgba(245,158,11,0.8)]"></span>
+                            </div>
+
+                            <div class="space-y-3 mb-10 text-left overflow-y-auto max-h-[300px] pr-2 custom-scrollbar">
+                                ${(state.playersPending.length > 0 ? state.playersPending : [{ id: state.myId, name: 'ТИ (Хост)', color: state.playerColor || '#f59e0b', isHost: true }]).map(p => `
+                            <div class="flex items-center gap-4 p-4 bg-stone-900/80 border border-amber-900/40 shadow-sm transition-all hover:translate-x-1">
+                                ${p.id === state.myId ? `
+                                <div class="relative group/picker">
+                                    <div class="w-12 h-12 flex items-center justify-center border-2 border-stone-800 shadow-inner cursor-pointer" style="background-color: ${p.color}">
+                                        <i data-lucide="${p.isHost ? 'crown' : 'user'}" class="w-6 h-6 text-white drop-shadow-md"></i>
+                                    </div>
+                                    <input type="color" value="${p.color}"
+                                        oninput="
+                                            state.playerColor = this.value;
+                                            const myP = state.playersPending.find(x => x.id === state.myId);
+                                            if(myP) myP.color = this.value;
+
+                                            if(network.isHost) {
+                                                network.broadcast({type: 'LOBBY_UPDATE', players: state.playersPending, roomCode: state.roomCode});
+                                            } else {
+                                                network.sendToHost({type: 'PLAYER_UPDATE', payload: {color: this.value}});
+                                            }
+                                            renderUI();
+                                        "
+                                        class="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                                    >
+                                    <div class="absolute -bottom-2 -right-2 bg-stone-800 border border-amber-900 p-1 shadow-md pointer-events-none">
+                                        <i data-lucide="edit-2" class="w-3 h-3 text-amber-500"></i>
+                                    </div>
+                                </div>
+                                ` : `
+                                <div class="w-12 h-12 flex items-center justify-center border-2 border-stone-800 shadow-inner" style="background-color: ${p.color}">
+                                    <i data-lucide="${p.isHost ? 'crown' : 'user'}" class="w-6 h-6 text-white drop-shadow-md"></i>
+                                </div>
+                                `}
+                                <div class="flex-1">
+                                    <p class="font-black text-lg ${p.id === state.myId ? 'text-amber-400' : 'text-amber-100'}">${p.name} ${p.id === state.myId ? '(ТИ)' : ''}</p>
+                                    <p class="text-[10px] font-bold opacity-60 text-amber-600 uppercase tracking-wider">${p.isHost ? 'Върховен Крал' : 'Заклет Войн'}</p>
+                                </div>
+                                ${p.isHost ? '<span class="px-2 py-1 bg-amber-900/50 border border-amber-700 text-amber-400 text-[8px] font-black uppercase tracking-tighter">КРАЛ</span>' : ''}
+                            </div>
+                        `).join('')}
+                            </div>
+
+                            ${state.isHost ? `
+                        <button onclick="event.stopPropagation(); startGameMultiplayer()" class="w-full py-5 ${theme.btnPrimary} font-black text-lg shadow-[0_0_20px_rgba(180,83,9,0.3)] hover:scale-[1.02] active:scale-[0.98] transition-all uppercase tracking-widest">
+                            НАЧАЛО НА ПОХОДА
+                        </button>
+                    ` : `
+                        <div class="flex flex-col items-center gap-4 py-6 px-8 bg-stone-950/50 border border-amber-900/30">
+                            <div class="flex gap-1">
+                                <span class="w-2 h-2 rounded-full bg-amber-700 animate-bounce" style="animation-delay: 0.1s"></span>
+                                <span class="w-2 h-2 rounded-full bg-amber-600 animate-bounce" style="animation-delay: 0.2s"></span>
+                                <span class="w-2 h-2 rounded-full bg-amber-500 animate-bounce" style="animation-delay: 0.3s"></span>
+                            </div>
+                            <span class="font-black text-xs text-amber-600 uppercase tracking-widest animate-pulse">Очакване на кралска заповед...</span>
+                        </div>
+                    `}
+                        </div>
+            </div>`;
+    }
+
+    function startGameMultiplayer() {
+        // The Host initializes the game state for everyone
+        // Host is excluded from state.players to act as an observer
+        state.players = [...state.playersPending];
+
+        if (state.players.length === 0) {
+            alert("Няма други играчи в лобито!");
+            return;
+        }
+
+        // Re-run the core init distribution logic for the multi players
+        state.mapSeed = Math.random() * 100;
+        state.usedQuestionIds = new Set();
+
+        // Re-initialize grid and bases
+        initGame();
+
+        // Logic in initGame completes board and phase
+        // Ensure phase start time is set correctly for Host too
+        state.phaseStartTime = Date.now();
+        state.isSelecting = false;
+        state.roundMoves = {};
+
+        // Now broadcast the results of this initialization to all guests
+        network.broadcast({
+            type: 'START_GAME',
+            players: state.players,
+            grid: state.grid,
+            mapSeed: state.mapSeed,
+            playerSkins: state.playerSkins,
+            gridRows: state.gridRows,
+            gridCols: state.gridCols,
+            currentThemeId: state.currentThemeId
+        });
+
+        renderUI();
+    }
+
+
+    // --- MAP SIMULATION ---
+    function enterMapSimulation() {
+        state.phase = 'map_simulation';
+        regenerateMap();
+        renderUI();
+
+        // Unlock controls for free look
+        if (controls) {
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.5;
+        }
+    }
+
+    function regenerateMap() {
+        state.mapSeed = Math.random() * 10000;
+        // Update grid terrain heights
+        state.grid = Array(state.gridRows).fill().map((_, r) =>
+            Array(state.gridCols).fill().map((_, c) => ({
+                active: true,
+                owner: null,
+                base: false,
+                terrainHeight: getComputedHeight(r, c, state.gridRows, state.gridCols, state.mapSeed),
+                isForest: terrainNoise(c + state.mapSeed + 500, r + state.mapSeed + 500) > 0.25
+            }))
+        );
+        initBoard();
+        renderUI();
+    }
+
+    window.updateTerrainParam = (key, val) => {
+        state.terrainConfig[key] = parseFloat(val);
+        // Height-affecting parameters require full regeneration
+        const heightAffecting = ['mountainHeight', 'mountainThreshold', 'mountainScale', 'mountainNoiseScale', 'seabedHeight', 'islandRadius', 'islandHeight', 'islandBaseHeight', 'islandFalloff'];
+
+        if (heightAffecting.includes(key)) {
+            regenerateMap();
+        } else if (['waterHeight', 'waterOpacity', 'waveAmplitude', 'waveSpeed'].includes(key)) {
+            // Non-geometry updates can be done instantly
+            if (window.environmentObjects) {
+                const water = window.environmentObjects.find(obj => obj.geometry && obj.geometry.type === 'PlaneGeometry' && obj.material && obj.material.transparent);
+                if (water) {
+                    if (key === 'waterHeight') water.position.y = state.terrainConfig.waterHeight;
+                    if (key === 'waterOpacity') water.material.opacity = state.terrainConfig.waterOpacity;
+                    if (state.waterUniforms) {
+                        if (key === 'waveAmplitude') state.waterUniforms.amplitude.value = state.terrainConfig.waveAmplitude;
+                        if (key === 'waveSpeed') state.waterUniforms.speed.value = state.terrainConfig.waveSpeed;
+                    }
+                }
+            }
+            renderUI();
+        }
+    };
+
+    function exitMapSimulation() {
+        state.phase = 'start';
+        if (controls) controls.autoRotate = false;
+        renderUI();
+    }
+
+    function renderMapSimulationUI(theme) {
+        const cfg = state.terrainConfig;
+
+        const Slider = (label, key, min, max, step) => `
+                <div class="space-y-1">
+                    <div class="flex justify-between text-[10px] font-bold opacity-60 uppercase tracking-wider text-amber-500">
+                        <span>${label}</span>
+                        <span class="text-amber-200">${cfg[key]}</span>
+                    </div>
+                    <input type="range" min="${min}" max="${max}" step="${step}" value="${cfg[key]}"
+                        oninput="window.updateTerrainParam('${key}', this.value)"
+                        class="w-full h-1 bg-amber-900/30 appearance-none cursor-pointer accent-amber-600">
+                </div>
+            `;
+
+        return `
+                <div class="fixed inset-0 pointer-events-none font-serif">
+                    <!-- Left Debug Panel -->
+                    <div class="absolute top-4 left-4 w-72 bg-stone-900/95 backdrop-blur-md border-2 border-amber-900/50 p-6 pointer-events-auto shadow-[0_0_30px_rgba(0,0,0,0.8)] overflow-y-auto max-h-[90vh] custom-scrollbar">
+                        <div class="flex items-center gap-3 mb-6 border-b border-amber-900/50 pb-4">
+                            <div class="p-2 bg-amber-900/20 border border-amber-700/30"><i data-lucide="map" class="text-amber-500 w-5 h-5"></i></div>
+                            <div>
+                                <h2 class="text-amber-400 font-black text-lg leading-tight">Свитък на Света</h2>
+                                <p class="text-[9px] text-amber-600 uppercase tracking-[0.2em]">Магическо Генериране</p>
+                            </div>
+                        </div>
+
+                        <div class="space-y-6">
+                            <div class="space-y-4">
+                                <h3 class="text-[10px] font-black text-amber-500 uppercase tracking-widest border-b border-amber-900/30 pb-2">Земи</h3>
+                                ${Slider('Височина на земята', 'islandHeight', 1, 15, 0.5)}
+                                ${Slider('Основа на острова', 'islandBaseHeight', 1, 10, 0.5)}
+                                ${Slider('Радиус на острова', 'islandRadius', 0.2, 1.2, 0.05)}
+                                ${Slider('Наклон (Скали)', 'islandFalloff', 0.1, 2.0, 0.1)}
+                            </div>
+
+                            <div class="space-y-4">
+                                <h3 class="text-[10px] font-black text-blue-400 uppercase tracking-widest border-b border-amber-900/30 pb-2">Морета</h3>
+                                ${Slider('Дълбочина на океана', 'seabedHeight', -30, -2, 1)}
+                                ${Slider('Ниво на водата', 'waterHeight', -1, 5, 0.1)}
+                                ${Slider('Прозрачност', 'waterOpacity', 0.1, 1.0, 0.05)}
+                                ${Slider('Вълнение', 'waveAmplitude', 0, 1, 0.05)}
+                                ${Slider('Скорост на течението', 'waveSpeed', 0, 5, 0.1)}
+                            </div>
+
+                            <div class="space-y-4">
+                                <h3 class="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-amber-900/30 pb-2">Далечни Планини</h3>
+                                ${Slider('Височина на планини', 'mountainHeight', 0, 200, 5)}
+                                ${Slider('Отстояние', 'mountainThreshold', 1000, 10000, 500)}
+                                ${Slider('Стръмност', 'mountainScale', 0.01, 1.0, 0.01)}
+                                ${Slider('Неравност', 'mountainNoiseScale', 0.001, 0.02, 0.001)}
+                            </div>
+                        </div>
+
+                        <div class="mt-8 pt-6 border-t border-amber-900/50 space-y-3">
+                            <button onclick="regenerateMap()" class="w-full py-3 bg-red-900 hover:bg-red-800 border border-amber-700/50 text-amber-100 font-black shadow-[0_0_15px_rgba(180,83,9,0.3)] transition-all active:scale-95 flex items-center justify-center gap-2 uppercase tracking-widest text-xs">
+                                <i data-lucide="refresh-cw" class="w-4 h-4"></i> Създай Нов Свят
+                            </button>
+                            <button onclick="exitMapSimulation()" class="w-full py-2.5 bg-stone-800 hover:bg-stone-700 border border-amber-900/50 text-amber-500/80 font-bold transition-all text-[10px] uppercase tracking-widest">
+                                Назад към Залата
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Bottom Controls Hint -->
+                    <div class="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-6 px-8 py-3 bg-stone-900/80 backdrop-blur-md border border-amber-900/50 text-[10px] font-black text-amber-500 uppercase tracking-widest">
+                        <div class="flex items-center gap-2"><div class="w-6 h-6 border border-amber-700/50 flex items-center justify-center">LMB</div> Оглед</div>
+                        <div class="flex items-center gap-2"><div class="w-6 h-6 border border-amber-700/50 flex items-center justify-center">RMB</div> Преместване</div>
+                        <div class="flex items-center gap-2"><div class="w-6 h-6 border border-amber-700/50 flex items-center justify-center">SCR</div> Мащаб</div>
+                    </div>
+
+                    <!-- Exit Button -->
+                    <button onclick="exitMapSimulation()" class="absolute top-4 right-4 p-4 bg-stone-800 hover:bg-stone-700 border border-amber-700 text-amber-400 shadow-[0_0_15px_rgba(0,0,0,0.8)] transition-all active:scale-90 pointer-events-auto">
+                        <i data-lucide="log-out" class="w-6 h-6"></i>
+                    </button>
+                </div>
+            `;
+    }
+
+    // --- MAP INSPECTOR ---
+    let inspectorScene, inspectorCamera, inspectorRenderer, inspectorControls;
+    function initInspector() {
+        const canvas = document.getElementById('asset-preview-canvas');
+        if (!canvas) return;
+
+        inspectorScene = new THREE.Scene();
+        inspectorScene.background = new THREE.Color(0x5c6a7a); // Muted medieval sky
+
+        // Lighting
+        const ambient = new THREE.AmbientLight(0xffeedd, 0.7);
+        inspectorScene.add(ambient);
+        const dir = new THREE.DirectionalLight(0xfff8dc, 1.0);
+        dir.position.set(50, 100, 50);
+        inspectorScene.add(dir);
+
+        // Camera positioning for full map view
+        const mapSize = Math.max(state.gridRows || 20, state.gridCols || 20) * 2;
+        inspectorCamera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.1, 1000);
+        inspectorCamera.position.set(0, mapSize, mapSize * 0.8);
+        inspectorCamera.lookAt(0, 0, 0);
+
+        inspectorRenderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+        inspectorRenderer.setSize(canvas.clientWidth, canvas.clientHeight);
+
+        // Controls
+        inspectorControls = new THREE.OrbitControls(inspectorCamera, canvas);
+        inspectorControls.enableDamping = true;
+        inspectorControls.maxPolarAngle = Math.PI / 2.2;
+
+        // Render Actual Game Grid
+        const group = new THREE.Group();
+
+        // Use state params or defaults
+        const rows = state.gridRows || 20;
+        const cols = state.gridCols || 20;
+        const hexRadius = 1;
+        const spacingX = hexRadius * Math.sqrt(3);
+        const spacingY = hexRadius * 1.5;
+        const offsetX = (cols * spacingX) / 2;
+        const offsetY = (rows * spacingY) / 2;
+
+        if (state.grid && state.grid.length > 0) {
+            state.grid.forEach((row, r) => {
+                row.forEach((cell, c) => {
+                    if (!cell.active) return;
+
+                    // Height & Pos
+                    const h = cell.terrainHeight !== undefined ? cell.terrainHeight : 1;
+                    const x = (c * spacingX) + (r % 2 !== 0 ? spacingX / 2 : 0) - offsetX;
+                    const z = (r * spacingY) - offsetY;
+
+                    const simpleHex = new THREE.CylinderGeometry(hexRadius * 0.95, hexRadius * 0.95, 0.2, 6);
+                    const mat = new THREE.MeshStandardMaterial({
+                        color: h > 3.5 ? 0xFFFFFF :
+                            h < 0.2 ? 0x1da2d8 :
+                                cell.isForest ? 0x2d5a27 : 0x659b5e
+                    });
+                    const tile = new THREE.Mesh(simpleHex, mat);
+                    tile.position.set(x, h, z);
+                    group.add(tile);
+
+                    // Nature Assets
+                    let natureType = null;
+                    if (h > 0.5) {
+                        if (cell.isForest) {
+                            if (Math.random() > 0.1) natureType = 'tree';
+                            else if (Math.random() > 0.5) natureType = 'bush';
+                        } else {
+                            if (Math.random() > 0.85) natureType = 'rock';
+                            else if (Math.random() > 0.8) natureType = 'bush';
+                        }
+                    }
+
+                    if (natureType) {
+                        const assetGeo = createAssetGeometry(natureType);
+                        const assetMat = new THREE.MeshStandardMaterial({
+                            color: natureType === 'rock' ? 0x7c858e : 0xffffff,
+                            map: null
+                        });
+                        // Tinting for non-textured preview
+                        if (natureType === 'tree') assetMat.color.setHex(0x2d5a27);
+                        if (natureType === 'bush') assetMat.color.setHex(0x3e7a32);
+
+                        const mesh = new THREE.Mesh(assetGeo, assetMat);
+                        // Apply Game Scale (2x)
+                        mesh.scale.set(2, 2, 2);
+                        mesh.position.set(x, h + 0.1, z);
+                        group.add(mesh);
+                    }
+                });
+            });
+        }
+
+        inspectorScene.add(group);
+        animateInspector();
+    }
+
+    function updateInspectorAsset() {
+        // No-op for map viewer, we build once
+    }
+
+    function createAssetGeometry(type) {
+        // Fallback for preview
+        return buildPrototype(type);
+    }
+
+    function animateInspector() {
+        if (!state.showAssetInspector) return;
+        requestAnimationFrame(animateInspector);
+        if (inspectorControls) inspectorControls.update();
+        inspectorRenderer.render(inspectorScene, inspectorCamera);
+    }
+
+    function renderAssetInspector(theme) {
+        return `<div class="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/95 backdrop-blur-md p-4 pointer-events-auto">
+                    <div class="w-full max-w-6xl h-[90vh] flex flex-col items-center bg-stone-900 border-4 border-double border-amber-800 shadow-[0_0_50px_rgba(0,0,0,0.9)] overflow-hidden relative">
+                        <div class="absolute top-4 right-4 z-50">
+                            <button onclick="state.showAssetInspector=false; renderUI()" class="p-2 bg-stone-800 border border-amber-700 hover:bg-stone-700 text-amber-500"><i data-lucide="x" class="w-6 h-6"></i></button>
+                        </div>
+
+                        <canvas id="asset-preview-canvas" class="w-full h-full border-b border-amber-900/50"></canvas>
+
+                        <div class="absolute bottom-8 bg-stone-900/80 border border-amber-900 px-6 py-3 text-amber-500 text-xs font-black tracking-[0.2em] pointer-events-none backdrop-blur-sm shadow-lg">
+                            ПРЕГЛЕД НА КРАЛСТВОТО // ORBIT CONTROLS ENABLED
+                        </div>
+                    </div>
+            </div>`;
+    }
+
+    // Export
+    window.enterMapSimulation = enterMapSimulation;
+    window.regenerateMap = regenerateMap;
+    window.exitMapSimulation = exitMapSimulation;
+
+    // Export for button click
+    window.initInspector = initInspector;
+    window.updateInspectorAsset = updateInspectorAsset;
+
+    function renderQuestionEditorModal(theme) {
+        if (!state.currentFolderId) state.currentFolderId = 'default';
+        // Current Folder logic
+        const currentFolder = state.folders.find(f => f.id === state.currentFolderId) || state.folders[0];
+        const folderQuestions = state.questions.filter(q => q.folderId === state.currentFolderId);
+
+        const renderForm = () => {
+            const q = state.editingQ;
+            if (!q) return `<div class="h-full flex flex-col items-center justify-center opacity-30 text-amber-600 text-center p-4"><i data-lucide="edit" class="w-16 h-16 mb-4 mx-auto"></i><p class="text-xl">Разгърни древен свитък<br>или създай нов в архива</p></div>`;
+            return `<div class="space-y-4 overflow-y-auto h-full pr-2 text-amber-100">
+                    <div class="flex items-center justify-between border-b border-amber-900/30 pb-3">
+                        <div class="flex gap-2 p-1 border border-amber-900/50 bg-stone-950 w-max">
+                            ${['multiple', 'open', 'image', 'matching'].map(t => `<button onclick="state.editingQ.type='${t}'; renderUI()" class="px-3 py-1.5 text-xs font-bold transition-all ${q.type === t ? `${theme.btnPrimary} shadow` : 'hover:bg-stone-800 text-amber-600'}">${t === 'multiple' ? 'Тест' : t === 'open' ? 'Отворен' : t === 'matching' ? 'Свързване' : 'Снимка'}</button>`).join('')}
+                        </div>
+                        <select onchange="state.editingQ.folderId = this.value; renderUI()" class="text-xs px-2 py-1.5 ${theme.uiInputBg} border ${theme.uiBorder}">
+                             ${state.folders.map(f => `<option value="${f.id}" ${f.id === q.folderId ? 'selected' : ''}>${f.name}</option>`).join('')}
+                        </select>
+                    </div>
+
+                    <div class="space-y-1">
+                        <label class="text-[10px] font-black uppercase text-amber-600 tracking-widest">Текст на Изпитанието</label>
+                        <textarea oninput="state.editingQ.q = this.value" class="w-full ${theme.uiInputBg} border border-amber-900 p-3 text-sm font-bold focus:border-amber-500 outline-none resize-none" rows="3">${q.q}</textarea>
+                    </div>
+
+                    ${q.type === 'image' ? `<div class="space-y-1"><label class="text-[10px] font-black uppercase text-amber-600 tracking-widest">URL Изображение</label><input value="${q.image || ''}" oninput="state.editingQ.image=this.value" class="w-full ${theme.uiInputBg} border border-amber-900 p-2 text-sm focus:border-amber-500 outline-none"></div>` : ''}
+
+                    <div class="space-y-2">
+                        <label class="text-[10px] font-black uppercase text-amber-600 tracking-widest">Възможни Отговори</label>
+                        ${q.type === 'open' ? `<input value="${q.correct || ''}" oninput="state.editingQ.correct=this.value" class="w-full ${theme.uiInputBg} border border-amber-900 p-3 font-mono text-sm focus:border-amber-500 outline-none" placeholder="Верен отговор">` :
+                q.type === 'matching' ? `<div class="space-y-2">${q.pairs.map((p, i) => `<div class="flex gap-2"><input value="${p[0]}" oninput="state.editingQ.pairs[${i}][0]=this.value" class="flex-1 ${theme.uiInputBg} border border-amber-900 p-2 text-xs focus:border-amber-500 outline-none" placeholder="Лява част"><input value="${p[1]}" oninput="state.editingQ.pairs[${i}][1]=this.value" class="flex-1 ${theme.uiInputBg} border border-amber-900 p-2 text-xs focus:border-amber-500 outline-none" placeholder="Дясна част"></div>`).join('')}<button onclick="state.editingQ.pairs.push(['','']); renderUI()" class="text-amber-500 text-xs flex items-center gap-1 mt-2 hover:text-amber-400"><i data-lucide="plus" class="w-3 h-3"></i> Добави връзка</button></div>` :
+                    `<div class="grid grid-cols-1 gap-2">${q.answers.map((ans, idx) => `<div class="relative group ${q.correct === idx ? 'ring-2 ring-green-600' : ''}"><input value="${ans}" oninput="state.editingQ.answers[${idx}]=this.value" class="w-full ${theme.uiInputBg} border border-amber-900 p-2 pr-8 text-sm focus:border-amber-500 outline-none"><button onclick="state.editingQ.correct=${idx}; renderUI()" class="absolute right-2 top-2 p-1 ${q.correct === idx ? 'bg-green-700 text-white' : 'text-amber-700 hover:text-green-500'}"><i data-lucide="check" class="w-4 h-4"></i></button></div>`).join('')}</div>`}
+                    </div>
+
+                    <div class="pt-4 mt-4 border-t border-amber-900/30 flex justify-between items-center">
+                        <span class="text-[10px] text-amber-700 font-mono">Печат ID: ${q.id || 'НОВ'}</span>
+                        <button onclick="handleSaveQuestion()" class="px-6 py-2 ${theme.btnPrimary} font-black flex items-center gap-2 shadow-[0_0_10px_rgba(180,83,9,0.5)] hover:scale-105 transition-transform text-sm tracking-widest uppercase"><i data-lucide="save" class="w-4 h-4"></i> Подпечатай</button>
+                    </div>
+                </div > `;
+        };
+
+        return `<div class="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/90 backdrop-blur-sm p-4 pointer-events-auto">
+                    <div class="${theme.uiBg} w-full max-w-6xl h-[85vh] flex flex-col shadow-[0_0_50px_rgba(0,0,0,0.8)] overflow-hidden">
+                        <div class="flex justify-between items-center p-4 border-b-2 border-amber-900/50 bg-stone-950/80 shadow-md">
+                            <h3 class="text-xl font-black flex items-center gap-3 tracking-widest text-amber-500 uppercase"><i data-lucide="scroll-text" class="w-6 h-6"></i> Кралски Архив</h3>
+                            <div class="flex gap-3">
+                                <button onclick="window.initNewQuestion(); state.editingQ.folderId = state.currentFolderId; renderUI();" class="px-4 py-2 bg-stone-800 border border-amber-700 hover:bg-stone-700 text-amber-200 text-xs font-black uppercase tracking-widest flex items-center gap-2"><i data-lucide="plus" class="w-4 h-4"></i> Нов Запис</button>
+                                <button onclick="state.showQuestionsEditor=false; renderUI()" class="text-amber-700 hover:text-red-500 transition-colors"><i data-lucide="x" class="w-8 h-8"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-1 overflow-hidden font-serif">
+                            <!-- Left: Folders -->
+                            <div class="w-56 flex flex-col border-r-2 border-amber-900/50 bg-stone-900/50 shadow-inner">
+                                <div class="p-3 border-b border-amber-900/30 font-black text-[10px] text-amber-600 uppercase tracking-widest">Томове</div>
+                                <div class="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                                    ${state.folders.map(f => `
+                                    <div onclick="state.currentFolderId='${f.id}'; renderUI()" class="p-2 cursor-pointer flex justify-between items-center group transition-colors border border-transparent ${state.currentFolderId === f.id ? 'bg-amber-900/20 border-amber-700/50 text-amber-400' : 'hover:bg-stone-800 text-amber-700'}">
+                                        <div class="flex items-center gap-2 overflow-hidden">
+                                            <i data-lucide="book${state.currentFolderId === f.id ? '-open' : ''}" class="w-4 h-4 flex-shrink-0"></i>
+                                            <span class="truncate text-xs font-bold tracking-wider">${f.name}</span>
+                                        </div>
+                                        ${f.id !== 'default' ? `<button onclick="event.stopPropagation(); window.handleDeleteFolder('${f.id}')" class="opacity-0 group-hover:opacity-100 hover:text-red-500 p-1"><i data-lucide="trash-2" class="w-3 h-3"></i></button>` : ''}
+                                    </div>
+                                `).join('')}
+                                    <button onclick="window.handleAddFolder()" class="w-full p-2 mt-4 border border-dashed border-amber-800/50 hover:bg-stone-800 text-amber-600 text-xs font-bold transition-all flex items-center justify-center gap-2">
+                                        <i data-lucide="plus" class="w-3 h-3"></i> Нов Том
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Middle: Questions List -->
+                            <div class="w-72 flex flex-col border-r-2 border-amber-900/50 bg-stone-900/30 shadow-inner">
+                                <div class="p-3 border-b border-amber-900/30 font-black text-[10px] text-amber-600 uppercase tracking-widest flex justify-between">
+                                    <span>Страници (${folderQuestions.length})</span>
+                                </div>
+                                <div class="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
+                                    ${folderQuestions.map(q => `
+                                    <div onclick="state.editingQ = JSON.parse(JSON.stringify(state.questions.find(x => x.id === ${q.id}))); renderUI()" class="p-3 cursor-pointer transition-all flex flex-col gap-1 border ${state.editingQ && state.editingQ.id === q.id ? 'bg-amber-900/20 border-amber-500 shadow-[inset_0_0_10px_rgba(217,119,6,0.2)]' : 'bg-stone-950 border-amber-900/50 hover:border-amber-700/80'}">
+                                        <span class="line-clamp-2 text-xs font-bold text-amber-100 leading-relaxed">${q.q || "(Празен лист)"}</span>
+                                        <div class="flex justify-between items-center mt-2">
+                                            <span class="text-[9px] text-amber-600 font-black uppercase tracking-wider">${q.type}</span>
+                                            <button onclick="event.stopPropagation(); handleDeleteQuestion(${q.id})" class="text-amber-800 hover:text-red-500"><i data-lucide="trash-2" class="w-3 h-3"></i></button>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                                    ${folderQuestions.length === 0 ? `<div class="text-center text-amber-800/50 text-xs py-10 font-black uppercase tracking-widest">Празен том</div>` : ''}
+                                </div>
+                            </div>
+
+                            <!-- Right: Editor -->
+                            <div class="flex-1 p-6 bg-stone-900/10 overflow-hidden flex flex-col relative">
+                                <!-- Background subtle emblem -->
+                                <i data-lucide="shield" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 text-amber-900/5 pointer-events-none"></i>
+                                <div class="relative z-10 h-full">
+                                    ${state.showRadiusConfig ? renderRadiusConfigModal(theme) :
+            state.showSkinEditor ? renderSkinEditor(theme) :
+                renderForm()}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+            </div > `;
+    }
+
+    function renderHUD(theme) {
+        return `
+                    <div class="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-4 md:p-6 font-serif">
+
+                <!--TOP BAR-->
+                    <div class="flex justify-between items-start w-full gap-1 md:gap-4">
+                        <!-- Players -->
+                        <div class="space-y-3 pointer-events-auto shrink">
+                            <div class="bg-stone-900/90 backdrop-blur-md p-3 border-2 border-amber-900/50 shadow-[0_4px_20px_rgba(0,0,0,0.8)] min-w-[140px] md:min-w-[200px]">
+                                <h4 class="text-[10px] text-amber-600 uppercase font-black mb-3 px-2 tracking-[0.2em] flex items-center gap-2 border-b border-amber-900/30 pb-2">
+                                    <i data-lucide="swords" class="w-4 h-4"></i> ФРАКЦИИ
+                                </h4>
+                                <div class="space-y-2">
+                                    ${state.players.map(p => `
+                                    <div class="flex items-center gap-3 p-2 transition-all border ${state.roundMoves[p.id] ? 'bg-amber-900/20 border-amber-500/50 shadow-[inset_0_0_10px_rgba(217,119,6,0.2)]' : 'bg-stone-950/50 border-stone-800'}">
+                                        <div class="w-3.5 h-3.5 border border-stone-950 shadow-[0_0_8px_rgba(0,0,0,0.8)]" style="background-color: ${p.color}"></div>
+                                        <span class="font-bold text-xs text-amber-100 truncate max-w-[100px] drop-shadow-md tracking-wider">${p.name}</span>
+                                        <div class="ml-auto bg-stone-950 px-2 py-0.5 text-[10px] font-mono font-black text-amber-500 border border-amber-900/50 shadow-inner">
+                                            ${state.scores[p.id] || 0}
+                                        </div>
+                                    </div>
+                                `).join('')}
+                                    ${state.isHost ? `
+                                    <div class="mt-4 pt-3 border-t border-amber-900/30">
+                                         <div class="flex items-center gap-3 p-2 bg-stone-950 border border-amber-700/30">
+                                            <div class="w-2.5 h-2.5 bg-amber-500 animate-pulse shadow-[0_0_10px_rgba(245,158,11,0.5)]"></div>
+                                            <span class="font-black text-[9px] text-amber-500 uppercase tracking-widest leading-none">ВЪРХОВЕН НАБЛЮДАТЕЛ</span>
+                                         </div>
+                                    </div>
+                                ` : ''}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- PLANNING TIMER -->
+                        ${state.phase === 'planning' ? `
+                    <div class="pointer-events-auto flex flex-col items-center group shrink-0 mx-auto">
+                        <div class="bg-stone-900/90 backdrop-blur-md px-6 md:px-12 py-3 md:py-4 border-4 border-double border-amber-700 shadow-[0_10px_40px_rgba(0,0,0,0.8)] flex flex-col items-center transition-all hover:scale-105 relative overflow-hidden">
+                            <div class="absolute inset-0 bg-gradient-to-t from-amber-900/10 to-transparent opacity-50"></div>
+                            <span class="text-[8px] md:text-[10px] uppercase font-black text-amber-600 tracking-[0.4em] mb-1 relative z-10">ПЯСЪЧЕН ЧАСОВНИК</span>
+                            <span id="hud-timer-val" class="text-4xl md:text-5xl font-mono font-black relative z-10 ${state.planningTime < 5 ? 'text-red-600 animate-pulse' : 'text-amber-400'} drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+                                ${Math.ceil(state.planningTime)}
+                            </span>
+                        </div>
+                        <div class="mt-3 px-6 py-1.5 bg-stone-950/80 border border-amber-800/50 backdrop-blur-md shadow-lg">
+                            <span class="text-[10px] font-black text-amber-500 uppercase tracking-widest">ПОСОЧИ ЗЕМИ ЗА ЗАВОЕВАНИЕ</span>
+                        </div>
+                    </div>
+                    ` : ''}
+
+                        <!-- Stats Card -->
+                        <div class="flex flex-col items-end gap-3 pointer-events-auto shrink">
+                            <div class="bg-stone-900/90 backdrop-blur-md p-2 md:p-4 border-2 border-amber-900/50 shadow-[0_4px_20px_rgba(0,0,0,0.8)] flex items-center gap-3 md:gap-5 hover:translate-y-[-2px] transition-all group">
+                                <div class="text-right">
+                                    <p class="hidden md:block text-[8px] md:text-[10px] uppercase font-black text-amber-700 leading-none mb-1 md:mb-2 tracking-widest">Кралски Престиж</p>
+                                    <p class="text-2xl md:text-4xl font-black text-amber-400 leading-none drop-shadow-[0_2px_2px_rgba(0,0,0,0.8)]">${calculateGrade()}</p>
+                                </div>
+                                <div class="w-10 h-10 md:w-14 md:h-14 bg-gradient-to-br from-amber-600 to-red-900 border border-amber-400 flex items-center justify-center text-stone-950 shadow-[0_0_15px_rgba(180,83,9,0.5)] group-hover:rotate-12 transition-transform">
+                                    <i data-lucide="crown" class="w-6 h-6 md:w-8 md:h-8"></i>
+                                </div>
+                            </div>
+
+                            <!-- Mini Log Feed -->
+                            <div class="bg-stone-950/80 backdrop-blur-md p-3 border border-amber-900/50 w-64 hidden md:block shadow-inner">
+                                <div class="space-y-2 cursor-default">
+                                    ${state.logs.slice(-3).reverse().map(log => `
+                                    <div class="text-[10px] font-bold text-amber-200 truncate flex items-center gap-2 tracking-wide">
+                                        <i data-lucide="scroll" class="w-3 h-3 text-amber-600"></i> ${log}
+                                    </div>
+                                `).join('')}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+            </div > `;
+    }
+    function renderStatus(theme) { return `<div class="absolute bottom-8 left-0 right-0 text-center z-10 pointer-events-none"><div class="inline-block ${theme.uiBg} px-8 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.9)]">${state.phase === 'planning' ? `<span class="text-amber-400 font-black tracking-widest uppercase text-sm drop-shadow-md">Избери територия, милорд!</span>` : ''}</div></div>`; }
+
+    function renderVictoryScreen(theme) {
+        // Sort players by score (or grade)
+        const sortedPlayers = [...state.players].sort((a, b) => (state.scores[b.id] || 0) - (state.scores[a.id] || 0));
+
+        return `<div class="flex flex-col items-center justify-center min-h-screen bg-stone-950/95 pointer-events-auto relative z-50 animate-in fade-in duration-700 font-serif p-4 bg-[url('https://www.transparenttextures.com/patterns/stardust.png')]">
+                <h1 class="text-4xl md:text-6xl font-black text-amber-500 mb-8 drop-shadow-[0_0_40px_rgba(217,119,6,0.6)] uppercase tracking-[0.2em] border-b-2 border-amber-600/50 pb-4">Летопис на Победителите</h1>
+
+                <div class="bg-stone-900/80 p-6 md:p-8 border-4 border-double border-amber-800 shadow-[0_0_50px_rgba(0,0,0,0.9)] mb-8 w-full max-w-4xl overflow-hidden backdrop-blur-md">
+                    <div class="overflow-x-auto custom-scrollbar">
+                        <table class="w-full text-amber-100">
+                            <thead>
+                                <tr class="text-xs uppercase font-black text-amber-600 tracking-widest border-b border-amber-900/50 bg-stone-950">
+                                    <th class="text-left py-4 pl-6">Фракция</th>
+                                    <th class="py-4 text-center">Заети Земи</th>
+                                    <th class="py-4 text-center text-green-600">Вярни Ходове</th>
+                                    <th class="py-4 text-center text-red-600">Грешки</th>
+                                    <th class="py-4 text-right pr-6">Престиж</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-amber-900/30">
+                                ${sortedPlayers.map((p, idx) => {
+            const stats = (state.allPlayerStats && state.allPlayerStats[p.id]) ? state.allPlayerStats[p.id] : { correct: 0, wrong: 0 };
+            const grade = calculateGrade(p.id);
+            const isWinner = grade === "6.00";
+
+            return `
+                                    <tr class="transition-colors hover:bg-stone-800/50 ${isWinner ? 'bg-amber-900/20' : ''}">
+                                        <td class="py-5 pl-6 flex items-center gap-4">
+                                            <span class="text-sm font-black text-amber-700 w-4">${idx + 1}.</span>
+                                            <div class="w-8 h-8 border border-stone-950 shadow-[0_0_10px_rgba(0,0,0,0.8)]" style="background-color: ${p.color}"></div>
+                                            <span class="font-bold tracking-wider text-sm ${isWinner ? 'text-amber-400' : 'text-amber-100'}">${p.name} ${isWinner ? '<i data-lucide="crown" class="inline w-5 h-5 ml-2 text-amber-500"></i>' : ''}</span>
+                                        </td>
+                                        <td class="py-5 text-center font-mono font-black text-amber-500 text-lg">${state.scores[p.id] || 0}</td>
+                                        <td class="py-5 text-center text-green-500 font-mono font-bold">${stats.correct}</td>
+                                        <td class="py-5 text-center text-red-500 font-mono font-bold">${stats.wrong}</td>
+                                        <td class="py-5 pr-6 text-right">
+                                            <span class="px-4 py-1.5 text-sm font-black tracking-widest border ${isWinner ? 'bg-amber-600 text-stone-950 border-amber-400 shadow-[0_0_15px_rgba(217,119,6,0.5)]' : 'bg-stone-950 border-amber-900 text-amber-400'}">
+                                                ${grade}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                    `;
+        }).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="flex gap-4">
+                    <button onclick="location.reload()" class="px-10 py-4 ${theme.btnPrimary} font-black text-xl shadow-[0_0_30px_rgba(180,83,9,0.5)] transition-all hover:scale-105 active:scale-95 uppercase tracking-widest">Нова Кампания</button>
+                </div>
+            </div > `;
+    }
+
+    function renderGameOverScreen(theme) {
+        return `<div class="flex flex-col items-center justify-center min-h-screen bg-stone-950/95 pointer-events-auto relative z-50 animate-in zoom-in duration-300 font-serif">
+                <h1 class="text-5xl md:text-7xl font-black text-red-800 mb-8 uppercase tracking-[0.2em] drop-shadow-[0_2px_2px_rgba(0,0,0,1)] border-b-2 border-red-900 pb-4">КРАХ НА ИМПЕРИЯТА</h1>
+                 <div class="bg-stone-900 p-8 border-4 border-double border-red-900/50 shadow-[0_0_50px_rgba(153,27,27,0.3)] mb-8 flex flex-col items-center min-w-[300px]">
+                    <span class="text-amber-600 font-black uppercase tracking-widest text-sm mb-4">Останал Престиж</span>
+                    <span class="text-6xl font-black text-red-500 drop-shadow-md">${calculateGrade()}</span>
+                </div>
+                <button onclick="location.reload()" class="px-10 py-4 bg-stone-800 hover:bg-stone-700 text-amber-500 border border-amber-900 font-black text-xl shadow-xl transition-all hover:scale-105 uppercase tracking-widest">Започни отначало</button>
+            </div > `;
+    }
+
+    function renderQuestionModal(theme) {
+        const q = state.currentQuestion;
+        const eliminated = isEliminated();
+        const hasAnswered = eliminated || !!(state.isMultiplayer ? (state.roundResults && state.roundResults[state.myId] !== undefined) : state.hasAnsweredLocally);
+
+        return `
+                    <div class="absolute inset-0 z-50 flex items-center justify-center bg-stone-950/80 backdrop-blur-sm p-4 pointer-events-auto animate-in fade-in duration-300 font-serif">
+                        <div class="question-container ${theme.uiBg} w-full max-w-2xl shadow-[0_0_50px_rgba(0,0,0,0.9)] flex flex-col p-8 transition-all relative">
+                            ${hasAnswered ? `
+                        <div class="absolute inset-0 bg-stone-950/60 backdrop-blur-[2px] z-10 flex items-center justify-center">
+                            <div class="bg-stone-900 text-amber-500 px-8 py-4 border-2 border-amber-700/50 font-black flex items-center gap-3 shadow-[0_0_30px_rgba(0,0,0,0.8)] uppercase tracking-widest">
+                                <div class="w-3 h-3 rounded-full ${eliminated ? 'bg-red-700' : 'bg-amber-500'} shadow-[0_0_10px_currentColor] animate-ping"></div>
+                                ${eliminated ? 'ПРИЗРАК НА ПАДНАЛ ВОЙН...' : 'ОЧАКВАНЕ НА ВРАГОВЕТЕ...'}
+                            </div>
+                        </div>
+                    ` : `
+                        <div class="absolute top-4 right-8 bg-stone-950/80 px-4 py-2 border border-amber-900/50 shadow-inner">
+                             <span id="modal-timer-val" class="font-mono font-black text-2xl ${state.planningTime < 5 ? 'text-red-600' : 'text-amber-500'} drop-shadow-md">
+                                ${Math.ceil(state.planningTime)}
+                             </span>
+                        </div>
+                    `}
+
+                            <h2 class="question-title text-xl md:text-2xl font-black mb-8 text-amber-400 text-center leading-relaxed tracking-wide drop-shadow-sm border-b border-amber-900/30 pb-6 mt-4">"${q.q}"</h2>
+                            ${q.type === 'multiple' ? `
+                        <div class="flex flex-col gap-6">
+                            <div class="answer-grid grid grid-cols-1 md:grid-cols-2 gap-4">
+                                ${q.answers.map((ans, idx) => `
+                                    <button onclick="state.selectedAnswerIdx = ${idx}; renderUI()"
+                                            ${hasAnswered ? 'disabled' : ''}
+                                            class="answer-btn p-5 font-bold text-sm md:text-base transition-all border-2 ${state.selectedAnswerIdx === idx ? 'bg-amber-900/80 text-amber-100 border-amber-500 shadow-[inset_0_0_15px_rgba(217,119,6,0.3)]' : `bg-stone-900/50 border-amber-900/50 text-amber-200 hover:bg-stone-800 hover:border-amber-700`} text-left flex items-center gap-4 group">
+                                        <span class="w-8 h-8 flex-shrink-0 flex items-center justify-center font-black ${state.selectedAnswerIdx === idx ? 'bg-amber-700 text-stone-950' : 'bg-stone-950 border border-amber-900/50 text-amber-600'} text-xs font-mono shadow-inner">${String.fromCharCode(65 + idx)}</span>
+                                        <span class="tracking-wide">${ans}</span>
+                                    </button>
+                                `).join('')}
+                            </div>
+                            <button onclick="if(state.selectedAnswerIdx !== null) window.handleAnswer(state.selectedAnswerIdx)"
+                                    ${hasAnswered || state.selectedAnswerIdx === null ? 'disabled' : ''}
+                                    class="w-full py-6 mt-4 ${state.selectedAnswerIdx === null ? 'bg-stone-900 border border-stone-800 text-stone-700 cursor-not-allowed' : theme.btnPrimary} font-black text-xl shadow-[0_5px_15px_rgba(0,0,0,0.5)] transition-all uppercase tracking-[0.2em]">
+                                ИЗРЕЧИ ОТГОВОРА
+                            </button>
+                        </div>
+                    ` : q.type === 'matching' ? `
+                        <div class="grid grid-cols-2 gap-6">
+                            <div class="space-y-3">
+                                ${q.pairs.map((p, i) => `
+                                    <button onclick="handleMatchingClick('left', ${i})" id="match-left-${i}"
+                                            ${hasAnswered ? 'disabled' : ''}
+                                            class="w-full p-4 font-bold text-sm border-2 transition-all ${state.matchPairsFound.includes(i) ? 'opacity-0 scale-90' : state.matchSelectedLeft === i ? theme.btnPrimary : `bg-stone-900/50 border-amber-900/50 text-amber-200`}">
+                                        ${p[0]}
+                                    </button>
+                                `).join('')}
+                            </div>
+                            <div class="space-y-3">
+                                ${state.matchingRightOrder.map(i => `
+                                    <button onclick="handleMatchingClick('right', ${i})" id="match-right-${i}"
+                                            ${hasAnswered ? 'disabled' : ''}
+                                            class="w-full p-4 font-bold text-sm border-2 transition-all bg-stone-900/50 border-amber-900/50 text-amber-200 ${state.matchPairsFound.includes(i) ? 'opacity-0 scale-90' : ''}">
+                                        ${q.pairs[i][1]}
+                                    </button>
+                                `).join('')}
+                            </div>
+                        </div>
+                        <button onclick="window.handleAnswer(true)"
+                                ${hasAnswered || state.matchPairsFound.length < (q.pairs ? q.pairs.length : 0) ? 'disabled' : ''}
+                                class="w-full mt-8 py-6 ${state.matchPairsFound.length < (q.pairs ? q.pairs.length : 0) ? 'bg-stone-900 border border-stone-800 text-stone-700 cursor-not-allowed' : theme.btnPrimary} font-black text-xl shadow-[0_5px_15px_rgba(0,0,0,0.5)] transition-all uppercase tracking-[0.2em]">
+                            ИЗРЕЧИ ОТГОВОРА
+                        </button>
+                    ` : `
+                        <div class="flex flex-col gap-6 mt-4">
+                            <input id="open-answer"
+                                   ${hasAnswered ? 'disabled' : ''}
+                                   class="w-full p-6 text-center text-2xl bg-stone-950 border-2 border-amber-700 shadow-[inset_0_0_20px_rgba(0,0,0,0.8)] outline-none focus:border-amber-500 text-amber-400 font-bold tracking-widest placeholder:text-amber-900/50"
+                                   placeholder="Напиши с перо..."
+                                   onkeydown="if(event.key==='Enter' && !'${hasAnswered}') window.handleAnswer(this.value)"
+                                   autofocus>
+                            <button onclick="window.handleAnswer(document.getElementById('open-answer').value)"
+                                    ${hasAnswered ? 'disabled' : ''}
+                                    class="w-full py-6 mt-4 ${theme.btnPrimary} font-black text-xl shadow-[0_5px_15px_rgba(0,0,0,0.5)] transition-all uppercase tracking-[0.2em]">
+                                ИЗРЕЧИ ОТГОВОРА
+                            </button>
+                        </div>
+                    `}
+                        </div >
+            </div > `;
+    }
+
+    function updateHUDTimers() {
+        const val = Math.ceil(state.planningTime);
+        const hud = document.getElementById('hud-timer-val');
+        const modal = document.getElementById('modal-timer-val');
+
+        if (hud) {
+            hud.innerText = val;
+            if (val < 5) hud.classList.add('text-red-500', 'animate-pulse');
+            else hud.classList.remove('text-red-500', 'animate-pulse');
+        }
+        if (modal) {
+            modal.innerText = val;
+            if (val < 5) modal.classList.add('text-red-500');
+            else modal.classList.remove('text-red-500');
+        }
+    }
+
+
+
+    window.onload = () => {
+        init();
+    };
+</script>
+</body>
+
+</html>

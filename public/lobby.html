@@ -1,0 +1,1707 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Krusader 3D: The Holy Quiz</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Cinzel+Decorative:wght@700&family=MedievalSharp&family=Almendra:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --gold: #d4af37; --gold-bright: #ffdf00; --gold-dark: #8b6508;
+            --blood: #8b0000; --blood-dark: #3e0000;
+            --iron: #2c3e50; --parchment: #e8d5a7;
+            --wood-dark: #2a1610; --wood-light: #4a2e1b;
+            --auth-gold-primary: #ecd08c; --auth-gold-highlight: #fff2c2;
+            --auth-gold-shadow: #8f6e30; --auth-parchment-bg: #2c2419;
+            --auth-parchment-dark: #1a150e;
+            --glow-color: rgba(255, 215, 0, 0.2);
+        }
+
+        body {
+            font-family: 'Almendra', serif;
+            background-color: #050505;
+            color: #f3e5ab;
+            margin: 0;
+            overflow: hidden;
+            user-select: none;
+            background-image: url("https://www.transparenttextures.com/patterns/stardust.png");
+        }
+
+        /* --- 3D GAME CSS --- */
+        #game-container {
+            display: none; /* Hidden until game starts */
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%; z-index: 100;
+            font-family: 'Cinzel', serif;
+            color: #fef3c7;
+        }
+        #game-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; touch-action: none; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
+        .pointer-events-auto { pointer-events: auto; }
+        #minimap-container {
+            position: absolute; bottom: 2rem; left: 2rem; width: 200px; height: 200px;
+            background: rgba(28, 25, 23, 0.9); border: 4px double rgba(180, 83, 9, 0.6);
+            border-radius: 0.5rem; overflow: hidden; z-index: 20;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8); backdrop-filter: blur(8px);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        #minimap-container:hover { transform: scale(1.05); border-color: rgba(217, 119, 6, 0.9); }
+        @media (max-width: 768px) { #minimap-container { width: 140px; height: 140px; bottom: 1rem; left: 1rem; border-radius: 0.25rem; } }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(180, 83, 9, 0.5); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(180, 83, 9, 0.8); }
+
+        /* --- LOBBY ANIMATIONS & CLASSES --- */
+        @keyframes float { 0%, 100% { transform: translateY(0px) rotate(0deg); } 50% { transform: translateY(-8px) rotate(1deg); } }
+        @keyframes ambient-bg { 0% { transform: scale(1) translateZ(0); } 50% { transform: scale(1.05) translateZ(0); } 100% { transform: scale(1) translateZ(0); } }
+        @keyframes fade-in-up { from { opacity: 0; transform: translateY(20px) translateZ(0); filter: brightness(0); } to { opacity: 1; transform: translateY(0) translateZ(0); filter: brightness(1); } }
+        @keyframes scroll-unroll { 0% { transform: scaleY(0) translateZ(0); opacity: 0; transform-origin: top; } 100% { transform: scaleY(1) translateZ(0); opacity: 1; transform-origin: top; } }
+        @keyframes spin-slow { from { transform: rotate(0deg) translateZ(0); } to { transform: rotate(360deg) translateZ(0); } }
+
+        .animate-fade-in-up { animation: fade-in-up 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards; will-change: transform, opacity; }
+        .animate-scroll-unroll { animation: scroll-unroll 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.1) forwards; will-change: transform, opacity; }
+        .animate-spin-slow { animation: spin-slow 12s linear infinite; will-change: transform; }
+        .animate-float { animation: float 4s ease-in-out infinite; will-change: transform; }
+        .delay-100 { animation-delay: 100ms; } .delay-200 { animation-delay: 200ms; } .delay-300 { animation-delay: 300ms; }
+
+        .bg-crusade { position: absolute; inset: -5%; background: linear-gradient(to bottom, rgba(0,0,0,0.6), rgba(5,5,5,1)), url('https://images.unsplash.com/photo-1599408162489-0505efe3c532?auto=format&fit=crop&q=80&w=2000'); background-size: cover; background-position: center; animation: ambient-bg 60s ease-in-out infinite alternate; z-index: -1; filter: contrast(1.2) sepia(0.2); will-change: transform; transform: translateZ(0); backface-visibility: hidden; perspective: 1000; }
+        .parchment-texture { background-color: var(--parchment); background-image: url("https://www.transparenttextures.com/patterns/aged-paper.png"), radial-gradient(ellipse at center, rgba(255,255,255,0.2) 0%, rgba(139, 69, 19, 0.7) 100%); box-shadow: inset 0 0 50px rgba(92, 58, 33, 0.9), 0 20px 40px rgba(0,0,0,0.9); border: 2px solid #8b5a2b; color: #3e2723; }
+        .forged-iron { background-color: #1a1a1a; background-image: url("https://www.transparenttextures.com/patterns/rusty-metal.png"), linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(0,0,0,0.8) 100%); border: 1px solid #444; border-top: 2px solid #777; border-bottom: 3px solid #000; box-shadow: inset 0 0 40px rgba(0,0,0,1), 0 20px 40px rgba(0,0,0,0.9); }
+        .wood-panel { background-color: var(--wood-dark); background-image: url("https://www.transparenttextures.com/patterns/wood-pattern.png"), linear-gradient(to bottom, rgba(255,255,255,0.08), rgba(0,0,0,0.8)); border-top: 2px solid #8c5a35; border-bottom: 4px solid #0a0502; box-shadow: inset 0 0 20px rgba(0,0,0,0.8), 0 15px 30px rgba(0,0,0,1); }
+
+        .font-medieval { font-family: 'MedievalSharp', cursive; } .font-cinzel { font-family: 'Cinzel', serif; } .font-cinzel-dec { font-family: 'Cinzel Decorative', cursive; }
+
+        .noble-button { background: linear-gradient(to bottom, var(--blood), var(--blood-dark)); background-image: url("https://www.transparenttextures.com/patterns/stardust.png"); border: 2px solid var(--gold-dark); border-top-color: var(--gold-bright); border-left-color: var(--gold); border-bottom-color: #3a2800; border-right-color: #3a2800; box-shadow: inset 0 2px 5px rgba(255,255,255,0.3), inset 0 -5px 15px rgba(0,0,0,0.9), 0 12px 20px rgba(0,0,0,0.8); transition: all 0.1s ease-in-out; text-shadow: 2px 2px 4px rgba(0,0,0,0.9), 0 0 10px rgba(255,0,0,0.5); border-radius: 6px; color: #ffebcd; will-change: transform; }
+        .noble-button:hover:not(:disabled) { background: linear-gradient(to bottom, #a00000, #5a0000); filter: brightness(1.1); }
+        .noble-button:active:not(:disabled) { transform: translateY(6px); box-shadow: inset 0 5px 15px rgba(0,0,0,0.9), 0 2px 5px rgba(0,0,0,0.8); border-top-color: #3a2800; border-left-color: #3a2800; border-bottom-color: var(--gold-bright); border-right-color: var(--gold); }
+        .noble-button:disabled { background: linear-gradient(to bottom, #2a2a2a, #0a0a0a); background-image: url("https://www.transparenttextures.com/patterns/rusty-metal.png"); border-color: #333; border-top-color: #555; border-bottom-color: #000; color: #666; cursor: not-allowed; box-shadow: inset 0 0 20px rgba(0,0,0,1), 0 4px 5px rgba(0,0,0,0.8); text-shadow: -1px -1px 2px rgba(0,0,0,0.9); transform: translateY(4px); }
+
+        .clip-shield { clip-path: polygon(0% 0%, 100% 0%, 100% 75%, 50% 100%, 0% 75%); }
+        .shield-container { position: relative; filter: drop-shadow(0 15px 20px rgba(0,0,0,0.9)); will-change: transform; transform: translateZ(0); }
+        .shield-border { clip-path: polygon(0% 0%, 100% 0%, 100% 75%, 50% 100%, 0% 75%); padding: 6px; }
+        .shield-inner { clip-path: polygon(0% 0%, 100% 0%, 100% 75%, 50% 100%, 0% 75%); height: 100%; width: 100%; position: relative; box-shadow: inset 0 0 30px rgba(0,0,0,1); }
+
+        .parchment-bubble { background-color: var(--parchment); background-image: url("https://www.transparenttextures.com/patterns/aged-paper.png"); box-shadow: inset 0 0 15px rgba(139, 69, 19, 0.4), 0 4px 8px rgba(0,0,0,0.7); border: 1px solid #a67c52; color: #3e2723; border-bottom-right-radius: 0; }
+        .iron-bubble { background: linear-gradient(135deg, #3a3a3a, #111); background-image: url("https://www.transparenttextures.com/patterns/rusty-metal.png"); border: 1px solid #555; border-top: 1px solid #777; box-shadow: inset 0 0 15px rgba(0,0,0,0.9), 0 4px 8px rgba(0,0,0,0.7); color: #e5e5e5; border-bottom-left-radius: 0; text-shadow: 1px 1px 2px #000; }
+
+        .auth-bg { background: radial-gradient(circle at center, #241911 0%, #080605 100%); }
+        .auth-card { background: linear-gradient(135deg, #36291e, #1a150e); background-image: url("https://www.transparenttextures.com/patterns/dark-leather.png"); border: 4px solid var(--auth-gold-shadow); border-top-color: var(--auth-gold-primary); border-left-color: var(--auth-gold-highlight); border-radius: 8px; box-shadow: 0 0 0 2px #000, 0 30px 60px rgba(0,0,0,0.9), inset 0 0 80px rgba(0, 0, 0, 0.8); position: relative; transform: translateZ(0); }
+        .auth-corner { position: absolute; width: 24px; height: 24px; background: linear-gradient(135deg, var(--auth-gold-highlight), var(--auth-gold-shadow)); border: 2px solid #fff; box-shadow: 0 4px 10px rgba(0,0,0,0.8); z-index: 2; border-radius: 2px; }
+        .auth-tl { top: -8px; left: -8px; } .auth-tr { top: -8px; right: -8px; } .auth-bl { bottom: -8px; left: -8px; } .auth-br { bottom: -8px; right: -8px; }
+        .auth-h2 { text-shadow: 0 4px 8px rgba(0,0,0,1), 0 0 20px rgba(236, 208, 140, 0.4); border-bottom: 2px solid var(--auth-gold-shadow); }
+        .auth-h2::after { content: '⚔'; position: absolute; bottom: -14px; left: 50%; transform: translateX(-50%); background: #1a150e; padding: 0 10px; color: var(--auth-gold-primary); font-size: 16px; border: 1px solid var(--auth-gold-shadow); border-radius: 50%; }
+        .auth-input { width: 100%; padding: 18px 14px 10px 40px; border: 1px solid rgba(236, 208, 140, 0.3); border-bottom: 3px solid var(--auth-gold-shadow); background: rgba(0,0,0,0.6); color: #ffffff; outline: none; transition: all 0.3s; border-radius: 4px; box-shadow: inset 0 4px 10px rgba(0,0,0,0.8); }
+        .auth-input:focus { background: rgba(0,0,0,0.8); border-color: var(--auth-gold-highlight); box-shadow: inset 0 4px 10px rgba(0,0,0,0.9), 0 0 15px rgba(236, 208, 140, 0.2); }
+        .auth-input-group svg { fill: var(--auth-gold-primary); transition: fill 0.3s; opacity: 0.9; filter: drop-shadow(0 2px 2px rgba(0,0,0,0.8)); }
+        .auth-input:focus ~ div svg, .auth-input:not(:placeholder-shown) ~ div svg { fill: #ffffff; opacity: 1; }
+        .auth-btn { border: 2px solid var(--auth-gold-shadow); background: linear-gradient(to bottom, #4d361b, #1a110a); box-shadow: inset 0 2px 5px rgba(255,255,255,0.2), 0 6px 10px rgba(0,0,0,0.6); transition: all 0.1s; will-change: transform; }
+        .auth-btn:active:not(:disabled) { transform: translateY(4px); box-shadow: inset 0 4px 10px rgba(0,0,0,0.9), 0 2px 5px rgba(0,0,0,0.6); border-top-color: #1a110a; }
+        .auth-btn-primary { background: linear-gradient(to bottom, #d4af37, #8b6508); border: 2px solid #5c431b; border-top-color: #ffe699; text-shadow: 1px 1px 3px rgba(0,0,0,0.8); color: #fff; }
+        .auth-btn-primary:active:not(:disabled) { background: linear-gradient(to bottom, #8b6508, #5c431b); border-top-color: #3a2800; }
+        .auth-divider::before, .auth-divider::after { content: ''; flex: 1; border-bottom: 2px solid rgba(236, 208, 140, 0.2); box-shadow: 0 1px 0 rgba(0,0,0,0.8); }
+    </style>
+</head>
+<body class="h-[100dvh] w-screen flex items-center justify-center p-0 sm:p-4 md:p-8">
+
+<div id="root" class="w-full h-full max-w-[1400px] flex items-center justify-center relative z-10 drop-shadow-none sm:drop-shadow-2xl"></div>
+
+<div id="game-container">
+    <canvas id="game-canvas"></canvas>
+    <canvas id="minimap-canvas" width="200" height="200" style="display:none;"></canvas>
+    <div id="ui-layer"></div>
+</div>
+
+<script>
+    const BufferGeometryUtils = THREE.BufferGeometryUtils;
+
+    class NetworkManager {
+        constructor() {
+            this.isHost = false;
+            this.myId = null;
+            this.roomCode = null;
+            this.socket = null;
+        }
+
+        init(isHost, roomCode = null, prefilledId = null) {
+            state.isMultiplayer = true;
+            this.isHost = isHost;
+            state.isHost = isHost;
+
+            this.myId = prefilledId || Math.random().toString(36).substr(2, 9);
+            state.myId = this.myId;
+            this.roomCode = roomCode;
+            state.roomCode = this.roomCode;
+            state.networkStatus = 'connecting';
+
+            console.log("Connecting to game server via HTTPS (Polling/WebSocket)...");
+
+            const socketOptions = {
+                transports: ['polling', 'websocket'],
+                secure: true,
+                reconnection: true,
+                reconnectionAttempts: 5,
+                path: '/socket.io/'
+            };
+
+            this.socket = io('https://minder.top', socketOptions);
+
+            this.socket.on("connect", () => {
+                console.log("Connected to game server!");
+                state.networkStatus = 'connected';
+                this.socket.emit("join_room", this.roomCode);
+
+                if (this.isHost) {
+                    // Host triggers the game start for all connected guests
+                    // after a small delay to ensure everyone is in the socket room
+                    setTimeout(() => startGameMultiplayer(), 1500);
+                }
+            });
+
+            this.socket.on("timer_update", (data) => {
+                state.planningTime = data.time;
+                if (state.phase === data.phase || data.phase === 'idle') {
+                    const hud = document.getElementById('hud-timer-val');
+                    const modal = document.getElementById('modal-timer-val');
+                    if (hud) {
+                        hud.innerText = Math.ceil(data.time);
+                        if (data.time < 5) hud.classList.add('text-red-500', 'animate-pulse');
+                        else hud.classList.remove('text-red-500', 'animate-pulse');
+                    }
+                    if (modal) {
+                        modal.innerText = Math.ceil(data.time);
+                        if (data.time < 5) modal.classList.add('text-red-500');
+                        else modal.classList.remove('text-red-500');
+                    }
+                }
+            });
+
+            this.socket.on("timer_end", (data) => {
+                if (state.isHost) {
+                    if (state.phase === 'planning') {
+                        state.players.forEach(p => {
+                            if (!state.roundMoves[p.id]) {
+                                const moves = getValidMoves(p.id, state.grid);
+                                if (moves.length > 0) handlePlayerSelect(moves[0].r, moves[0].c, p.id);
+                            }
+                        });
+                        if (state.phase === 'planning') triggerQuestion();
+                    } else if (state.phase === 'question') {
+                        state.phase = 'resolution';
+                        state.battleMsg = "ВРЕМЕТО ИЗТЕЧЕ!";
+                        renderUI();
+                        this.broadcast({ type: 'STATE_SYNC', state: this.getSyncData() });
+
+                        setTimeout(() => {
+                            state.battleMsg = null;
+                            const results = state.roundResults || {};
+                            executeMultiResolution(results);
+                            if (state.isMultiplayer) this.broadcast({ type: 'STATE_SYNC', state: this.getSyncData() });
+                        }, 2000);
+                    }
+                }
+            });
+
+            this.socket.on("receive_data", (data) => {
+                const senderId = data.senderId;
+                if (senderId === this.myId) return;
+                this.handleData(data, senderId);
+            });
+
+            this.socket.on("player_updated", (data) => {
+                if (this.isHost) {
+                    this.handleData({ type: 'PLAYER_UPDATE', senderId: data.id, payload: data.data }, data.id);
+                }
+            });
+
+            this.socket.on("disconnect", () => {
+                console.log("Disconnected from server");
+                state.networkStatus = 'disconnected';
+            });
+
+            if (this.isHost) {
+                if (this.heartbeat) clearInterval(this.heartbeat);
+                this.heartbeat = setInterval(() => {
+                    if (state.phase !== 'lobby' && state.phase !== 'start') {
+                        this.broadcast({ type: 'STATE_SYNC', state: this.getSyncData(), isHeartbeat: true });
+                    }
+                }, 3000);
+            }
+        }
+
+        broadcast(data) {
+            if (this.socket) {
+                data.senderId = this.myId;
+                this.socket.emit("send_data", { room: this.roomCode, data: data });
+            }
+        }
+
+        sendToHost(data) { this.broadcast(data); }
+
+        getSyncData() {
+            const fields = ['grid', 'players', 'phase', 'currentRound', 'roundMoves',
+                'roundResults', 'currentQuestion', 'matchingRightOrder', 'scores', 'logs',
+                'battleMsg', 'planningTime', 'timerEnd', 'matchPairsFound',
+                'matchSelectedLeft', 'playerSkins', 'currentThemeId', 'allPlayerStats'
+            ];
+            const sync = {};
+            fields.forEach(f => { if (state[f] !== undefined) sync[f] = state[f]; });
+            return sync;
+        }
+
+        handleData(data, senderId) {
+            switch (data.type) {
+                case 'START_GAME':
+                    state.players = data.players;
+                    state.grid = data.grid;
+                    state.mapSeed = data.mapSeed;
+                    if (data.playerSkins) state.playerSkins = data.playerSkins;
+                    if (data.gridRows) state.gridRows = data.gridRows;
+                    if (data.gridCols) state.gridCols = data.gridCols;
+                    if (data.currentThemeId) state.currentThemeId = data.currentThemeId;
+
+                    state.phase = 'planning';
+                    state.phaseStartTime = Date.now();
+                    state.isSelecting = false;
+                    state.roundMoves = {};
+                    initBoard();
+                    renderUI();
+                    break;
+                case 'STATE_SYNC':
+                    const syncFields = ['grid', 'phase', 'currentRound', 'roundMoves',
+                        'roundResults', 'currentQuestion', 'matchingRightOrder', 'scores',
+                        'logs', 'battleMsg', 'planningTime', 'timerEnd', 'matchPairsFound',
+                        'matchSelectedLeft', 'allPlayerStats'];
+
+                    if (data.state.players && Array.isArray(data.state.players)) {
+                        state.players = data.state.players;
+                    }
+                    const oldPhase = state.phase;
+                    syncFields.forEach(field => {
+                        if (data.state[field] !== undefined) state[field] = data.state[field];
+                    });
+                    if (!this.isHost && state.roundResults && state.myId && state.roundResults[state.myId] !== undefined) {
+                        if (!state.statUpdatedForRound) {
+                            if (state.roundResults[state.myId]) state.playerStats.correct++;
+                            else state.playerStats.wrong++;
+                            state.statUpdatedForRound = true;
+                        }
+                    }
+                    if (state.phase === 'planning' || state.phase === 'question') {
+                        if (state.phase !== oldPhase) state.statUpdatedForRound = false;
+                    }
+                    if (oldPhase === 'question' && state.phase !== 'question') {
+                        state.hasAnsweredLocally = false;
+                    }
+                    if (state.phase === 'planning' && oldPhase !== 'planning') {
+                        state.isSelecting = false;
+                    }
+                    updateBoard3D();
+                    renderUI();
+                    break;
+                case 'TIMER_SYNC':
+                    state.timerEnd = data.timerEnd;
+                    renderUI();
+                    break;
+                case 'ACTION_SUBMIT':
+                    if (this.isHost) {
+                        if (data.action === 'selectTile') window.handlePlayerSelect(data.r, data.c, senderId);
+                        else if (data.action === 'answer') window.handleAnswer(data.answer, senderId);
+                        this.broadcast({ type: 'STATE_SYNC', state: this.getSyncData() });
+                    }
+                    break;
+            }
+        }
+    }
+    const network = new NetworkManager();
+    window.network = network;
+
+    const DEFAULT_QUESTIONS = [
+        { id: 101, folderId: 'lit', type: 'multiple', q: "Кой е авторът на 'История славянобългарска'?", answers: ["Паисий Хилендарски", "Софроний Врачански", "Иван Вазов", "Христо Ботев"], correct: 0 },
+        { id: 201, folderId: 'hist', type: 'multiple', q: "Коя година избухва Френската революция?", answers: ["1789", "1848", "1917", "1776"], correct: 0 },
+        { id: 301, folderId: 'geo', type: 'multiple', q: "Кой икономически сектор включва земеделието?", answers: ["Първичен", "Вторичен", "Третичен", "Кватернерен"], correct: 0 },
+        { id: 401, folderId: 'bio', type: 'multiple', q: "Кой органел е 'електроцентралата' на клетката?", answers: ["Митохондрий", "Ядро", "Рибозома", "Лизозома"], correct: 0 },
+        { id: 501, folderId: 'phys', type: 'multiple', q: "Каква е единицата за електрично съпротивление?", answers: ["Ом", "Ампер", "Волт", "Ват"], correct: 0 }
+    ];
+
+    const THEMES = {
+        spring: {
+            id: 'spring', name: '🏰 Кралство', icon: 'castle',
+            bgClass: 'bg-stone-900', textClass: 'text-amber-50',
+            uiBg: 'bg-stone-900/95 backdrop-blur border-4 border-double border-amber-800 shadow-[0_0_40px_rgba(0,0,0,0.8)]', uiBorder: 'border-amber-700/50', accent: 'text-amber-500',
+            btnPrimary: 'bg-red-900 hover:bg-red-800 text-amber-100 border border-amber-600/50 shadow-[0_0_15px_rgba(180,83,9,0.4)]',
+            uiInputBg: 'bg-stone-950 text-amber-100 border-amber-900 placeholder:text-amber-700/40',
+            uiButtonSecondary: 'bg-stone-800 hover:bg-stone-700 text-amber-200 border border-amber-900',
+            colors: {
+                groundTop: 0x4a5e28, groundSide: 0x362c24, groundSnow: 0xd1d5db, edge: 0x6b8e23,
+                background: 0x3a4550, castle: 0x787b80, trunk: 0x3d2817, foliage: 0x1e3f1c,
+                water: 0x124059, rock: 0x50575e, grass: 0x556b2f, sun: 0xffcc77, house: 0x5e4b3c
+            },
+            lighting: { ambientColor: 0xffe6cc, ambientIntensity: 0.5, dirColor: 0xffddaa, dirIntensity: 1.1, fogColor: 0x3a4550, fogNear: 1500, fogFar: 25000, toneMappingExposure: 1.0 },
+            generateColor: (i, count) => `hsl(${210 + (i * 40) % 150}, 70%, 55%)`
+        }
+    };
+
+    const state = {
+        gridRows: 20, gridCols: 20, customMap: [], currentThemeId: 'spring', players: [], grid: [], scores: {}, phase: 'loading', currentRound: 1, roundMoves: {}, currentQuestion: null, logs: [], questions: [...DEFAULT_QUESTIONS], questionsDeck: [], folders: [{ id: 'default', name: 'Общи' }], radiusMapping: [], questionsMap: {},
+        playerStats: { correct: 0, wrong: 0, bonus: 0 }, matchSelectedLeft: null, matchPairsFound: [], matchingRightOrder: [], battleMsg: null, hoveredTile: null, battleIcons: [], mapSeed: Math.random() * 100, isMultiplayer: false, isHost: false, myId: 'p1', roomCode: null, playersPending: [], networkStatus: 'disconnected', planningTime: 30, timerEnd: 0, lastSyncedTime: 0, playerName: '', playerColor: '#b45309', playerSkins: {}, selectedAnswerIdx: null,
+        terrainConfig: { mountainHeight: 18, mountainThreshold: 1800, mountainScale: 0.08, mountainNoiseScale: 0.004, seabedHeight: -10, islandRadius: 0.75, islandHeight: 12, islandBaseHeight: 6, islandFalloff: 0.25, waterHeight: 0.5, waveAmplitude: 0.3, waveSpeed: 1.0, waterOpacity: 0.8 }
+    };
+    state.radiusMapping = state.folders.map((f, i) => ({ maxDist: (i + 1) * 6, folderId: f.id }));
+    window.state = state;
+
+    let scene, camera, renderer, controls, raycaster;
+    const clock = new THREE.Clock();
+    let tileMeshes = [];
+    const mouse = new THREE.Vector2();
+    let ambientLight, directionalLight;
+
+    function getHexDistance(r1, c1, r2, c2) {
+        const q1 = c1 - (r1 - (r1 & 1)) / 2; const q2 = c2 - (r2 - (r2 & 1)) / 2;
+        const x1 = q1, z1 = r1, y1 = -x1 - z1; const x2 = q2, z2 = r2, y2 = -x2 - z2;
+        return (Math.abs(x1 - x2) + Math.abs(y1 - y2) + Math.abs(z1 - z2)) / 2;
+    }
+    function getTheme() { return THEMES[state.currentThemeId] || THEMES.spring; }
+    function isEliminated() { const p = state.players.find(p => p.id === state.myId); return p ? !!p.eliminated : false; }
+    function addLog(msg) { state.logs = [msg, ...state.logs].slice(0, 5); }
+    function calculateGrade(pid) {
+        let stats = state.playerStats;
+        if (pid && state.allPlayerStats && state.allPlayerStats[pid]) stats = state.allPlayerStats[pid];
+        else if (pid && state.playerSkins && state.isMultiplayer) stats = { correct: 0, wrong: 0, bonus: 0 };
+        if ((state.phase === 'victory' || state.phase === 'gameover') && pid) {
+            const activeOwners = new Set();
+            state.grid.flat().forEach(c => { if (c.base && c.owner) activeOwners.add(c.owner); });
+            if (activeOwners.has(pid) && activeOwners.size === 1) return "6.00";
+        }
+        const total = stats.correct + stats.wrong + (stats.bonus || 0);
+        return total === 0 ? "2.00" : Math.min(6, 2 + ((stats.correct + (stats.bonus || 0)) / total) * 4).toFixed(2);
+    }
+
+    const terrainNoise = (x, z) => { const sin = Math.sin; return sin(x * 0.1 + z * 0.15) * 0.5 + sin(x * 0.3 - z * 0.2) * 0.25 + sin(x * 0.5 + z * 0.5) * 0.125; };
+    const getComputedHeight = (r, c, rows, cols, seed, mode = 'all') => {
+        const cfg = state.terrainConfig;
+        const spacingX = Math.sqrt(3), spacingY = 1.5;
+        const x = (c - cols / 2) * spacingX; const z = (r - rows / 2) * spacingY;
+        const distInUnits = Math.sqrt(x * x + z * z);
+        let height = cfg.seabedHeight;
+
+        if (mode === 'all' || mode === 'island') {
+            const n = (terrainNoise(c + seed, r + seed) + 0.8) / 1.6;
+            const islandRadius = Math.max(cols * spacingX, rows * spacingY) * cfg.islandRadius;
+            const normalizedDist = distInUnits / islandRadius;
+            const falloff = Math.pow(Math.max(0, 1.0 - normalizedDist), cfg.islandFalloff);
+            const mainlandHeight = (n * cfg.islandHeight + cfg.islandBaseHeight) * falloff;
+            const blend = Math.max(0, Math.min(1, (normalizedDist - 0.7) / 0.4));
+            height = mainlandHeight + (blend * cfg.seabedHeight);
+            height = Math.max(cfg.seabedHeight, height);
+        }
+        if (mode === 'all' || mode === 'mountains') {
+            const mountainDist = distInUnits;
+            if (mountainDist > cfg.mountainThreshold - 500) {
+                const mNoise = (terrainNoise(c * cfg.mountainNoiseScale + seed, r * cfg.mountainNoiseScale - seed) + 1) * 0.5;
+                const mountainScale = Math.max(0, mountainDist - cfg.mountainThreshold) * cfg.mountainScale;
+                height += Math.pow(Math.max(0, mNoise - 0.4), 1.6) * mountainScale * cfg.mountainHeight;
+            }
+        }
+        return height;
+    };
+
+    function createProceduralMaterials(theme) {
+        return [new THREE.MeshStandardMaterial({ color: theme.colors.groundSide, roughness: 0.9, side: THREE.DoubleSide }), new THREE.MeshStandardMaterial({ color: theme.colors.groundTop, roughness: 1.0 }), new THREE.MeshStandardMaterial({ color: theme.colors.groundSide, roughness: 0.9, side: THREE.DoubleSide })];
+    }
+
+    function init() {
+        const canvas = document.getElementById('game-canvas');
+        scene = new THREE.Scene();
+        camera = new THREE.PerspectiveCamera(window.innerWidth <= 768 ? 75 : 50, window.innerWidth / window.innerHeight, 0.1, 40000);
+        camera.position.set(0, 40, 50);
+
+        renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+        const theme = getTheme(); const lighting = theme.lighting;
+        scene.background = new THREE.Color(lighting.fogColor);
+        scene.fog = new THREE.Fog(lighting.fogColor, lighting.fogNear, lighting.fogFar);
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = lighting.toneMappingExposure;
+
+        controls = new THREE.OrbitControls(camera, canvas);
+        controls.enableDamping = true; controls.dampingFactor = 0.05; controls.maxPolarAngle = Math.PI / 2.2; controls.minDistance = 20; controls.maxDistance = 150;
+
+        raycaster = new THREE.Raycaster();
+        ambientLight = new THREE.AmbientLight(lighting.ambientColor, lighting.ambientIntensity); scene.add(ambientLight);
+        directionalLight = new THREE.DirectionalLight(lighting.dirColor, lighting.dirIntensity);
+        directionalLight.position.set(50, 60, 30); directionalLight.castShadow = true; scene.add(directionalLight);
+
+        loadAssets(() => {
+            if (!state.grid || state.grid.length === 0) {
+                state.grid = Array(state.gridRows).fill().map((_, r) => Array(state.gridCols).fill().map((_, c) => ({ active: true, owner: null, base: false, terrainHeight: getComputedHeight(r, c, state.gridRows, state.gridCols, state.mapSeed), isForest: terrainNoise(c + state.mapSeed + 500, r + state.mapSeed + 500) > 0.25 })));
+            }
+            initBoard(); renderUI(); animate();
+        });
+
+        window.addEventListener('resize', () => {
+            camera.fov = window.innerWidth <= 768 ? 75 : 50; camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight);
+            if (window.resizeTimeout) clearTimeout(window.resizeTimeout); window.resizeTimeout = setTimeout(fitCamera, 100);
+        });
+
+        let isDragging = false; let startPointerPos = new THREE.Vector2();
+        const updateMouse = (e) => {
+            const rect = canvas.getBoundingClientRect(); let x, y;
+            if (e.clientX !== undefined) { x = e.clientX; y = e.clientY; } else if (e.touches && e.touches.length > 0) { x = e.touches[0].clientX; y = e.touches[0].clientY; }
+            if (x === undefined) return;
+            mouse.x = ((x - rect.left) / rect.width) * 2 - 1; mouse.y = -((y - rect.top) / rect.height) * 2 + 1;
+        };
+        canvas.addEventListener('pointerdown', (e) => { isDragging = false; let x = e.clientX; let y = e.clientY; if (x === undefined && e.touches && e.touches.length > 0) { x = e.touches[0].clientX; y = e.touches[0].clientY; } if (x !== undefined) startPointerPos.set(x, y); updateMouse(e); });
+        canvas.addEventListener('pointermove', (e) => { let x = e.clientX; let y = e.clientY; if (x === undefined && e.touches && e.touches.length > 0) { x = e.touches[0].clientX; y = e.touches[0].clientY; } if (x === undefined) return; if (Math.sqrt(Math.pow(x - startPointerPos.x, 2) + Math.pow(y - startPointerPos.y, 2)) > 25) isDragging = true; updateMouse(e); });
+        canvas.addEventListener('pointerup', (e) => { if (!isDragging) { updateMouse(e); onCanvasClick(e); } });
+    }
+
+    function fitCamera() {
+        if (!state.gridCols) return;
+        const distH = (state.gridCols * 2 * 1.2) / (2 * Math.tan((camera.fov * Math.PI / 180) / 2) * camera.aspect);
+        const distV = (state.gridRows * 1.5 * 1.2) / (2 * Math.tan((camera.fov * Math.PI / 180) / 2));
+        const newPos = new THREE.Vector3().copy(camera.position).sub(controls.target).normalize().multiplyScalar(Math.max(distH, distV, 40)).add(controls.target);
+        if (camera.position.distanceTo(newPos) > 1) { camera.position.copy(newPos); controls.update(); }
+    }
+
+    function getTargetHex(mouseVec) {
+        if (!state.terrainMesh) return null;
+        raycaster.setFromCamera(mouseVec, camera);
+        const intersects = raycaster.intersectObject(state.terrainMesh);
+        if (intersects.length > 0) {
+            const p = intersects[0].point; const spacingX = Math.sqrt(3); const spacingY = 1.5;
+            const r = Math.round((p.z + (state.gridRows * spacingY) / 2) / spacingY);
+            const c = Math.round((p.x + (state.gridCols * spacingX) / 2 - ((r % 2 !== 0) ? spacingX / 2 : 0)) / spacingX);
+            return window.tileMap ? window.tileMap.get(`${r},${c}`) : null;
+        }
+        return null;
+    }
+
+    function onCanvasClick(event) {
+        if (state.blockInput || isEliminated()) return;
+        const target = getTargetHex(mouse);
+        if (target && state.phase === 'planning') handlePlayerSelect(target.userData.r, target.userData.c);
+    }
+
+    let terrainMesh = null;
+    function buildWallGeometry(width, height, depth) {
+        const geometries = [];
+        const baseGeo = new THREE.BoxGeometry(width, height * 0.3, depth * 1.4); baseGeo.translate(0, (height * 0.3) / 2, 0); geometries.push(baseGeo);
+        const bodyGeo = new THREE.BoxGeometry(width, height * 0.5, depth); bodyGeo.translate(0, height * 0.3 + (height * 0.5) / 2, 0); geometries.push(bodyGeo);
+        const numTeeth = Math.floor(width / (depth + depth * 0.8));
+        const startX = -((numTeeth * (depth + depth * 0.8)) - depth * 0.8) / 2;
+        for (let i = 0; i < numTeeth; i++) {
+            const t = new THREE.BoxGeometry(depth, height * 0.2, depth * 1.1);
+            t.translate(startX + i * (depth + depth * 0.8) + depth / 2, height * 0.8 + (height * 0.2) / 2, 0); geometries.push(t);
+        }
+        const merged = BufferGeometryUtils.mergeBufferGeometries(geometries); geometries.forEach(g => g.dispose()); return merged;
+    }
+
+    function buildPrototype(type) {
+        let parts = [];
+        try {
+            if (type === 'tree') { const trunk = new THREE.CylinderGeometry(0.1, 0.15, 0.8, 8); trunk.translate(0, 0.4, 0); parts.push(trunk); for (let i = 0; i < 5; i++) { const s = new THREE.SphereGeometry(0.4, 6, 6); const a = (i / 5) * Math.PI * 2; s.translate(Math.cos(a) * 0.25, 1.2 + Math.sin(i * 2) * 0.2, Math.sin(a) * 0.25); parts.push(s); } const top = new THREE.SphereGeometry(0.35, 6, 6); top.translate(0, 1.7, 0); parts.push(top); }
+            else if (type === 'rock') { const m = new THREE.DodecahedronGeometry(0.5, 0); m.scale(1, 0.7, 1); m.translate(0, 0.25, 0); parts.push(m); const p2 = new THREE.DodecahedronGeometry(0.35, 0); p2.translate(0.4, 0.1, 0); parts.push(p2); const p3 = new THREE.DodecahedronGeometry(0.25, 0); p3.translate(-0.3, 0.1, 0.3); parts.push(p3); }
+            else if (type === 'bush') { for (let i = 0; i < 5; i++) { const b = new THREE.SphereGeometry(0.3, 5, 5); const ang = Math.random() * Math.PI * 2; b.translate(Math.cos(ang) * 0.3, 0.15 + Math.random() * 0.1, Math.sin(ang) * 0.3); parts.push(b); } }
+            else if (type === 'house') { const base = new THREE.BoxGeometry(0.35, 0.3, 0.35); base.translate(0, 0.15, 0); parts.push(base); const roof = new THREE.ConeGeometry(0.32, 0.35, 4); roof.rotateY(Math.PI / 4); roof.translate(0, 0.45, 0); parts.push(roof); }
+            else if (type === 'castle') {
+                const f = new THREE.BoxGeometry(1.6, 0.4, 1.6); f.translate(0, 0.2, 0); parts.push(f);
+                const k = new THREE.BoxGeometry(0.8, 1.2, 0.8); k.translate(0, 0.8, 0); parts.push(k);
+                const kr = new THREE.ConeGeometry(0.7, 0.6, 4); kr.rotateY(Math.PI / 4); kr.translate(0, 1.7, 0); parts.push(kr);
+                [[-0.6, -0.6], [0.6, -0.6], [0.6, 0.6], [-0.6, 0.6]].forEach(([tx, tz]) => {
+                    const t = new THREE.CylinderGeometry(0.2, 0.25, 1.6, 8); t.translate(tx, 0.8, tz); parts.push(t);
+                    const tr = new THREE.ConeGeometry(0.28, 0.6, 8); tr.translate(tx, 1.9, tz); parts.push(tr);
+                });
+            }
+            if (parts.length === 0) return new THREE.BoxGeometry(0.1, 0.1, 0.1);
+            const validParts = parts.filter(p => p && p.attributes && p.attributes.position).map(p => { const ni = p.index ? p.toNonIndexed() : p.clone(); if (!ni.attributes.uv) ni.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(ni.attributes.position.count * 2), 2)); return ni; });
+            const merged = BufferGeometryUtils.mergeBufferGeometries(validParts);
+            if (type === 'tree' && merged) merged.scale(1.5, 1.5, 1.5); if (type === 'rock' && merged) merged.scale(1.2, 1.2, 1.2); if (type === 'bush' && merged) merged.scale(1.5, 1.5, 1.5); if (type === 'house' && merged) merged.scale(1.8, 1.8, 1.8);
+            validParts.forEach(p => p.dispose()); return merged;
+        } catch (e) { return new THREE.BoxGeometry(0.2, 0.2, 0.2); } finally { parts.forEach(p => p.dispose()); }
+    }
+
+    function initBoard() {
+        tileMeshes = []; window.tileMap = new Map(); state.battleIcons = [];
+        if (terrainMesh) { scene.remove(terrainMesh); terrainMesh.geometry.dispose(); terrainMesh = null; }
+        if (state.hexInstMesh) { scene.remove(state.hexInstMesh); state.hexInstMesh.geometry.dispose(); state.hexInstMesh = null; }
+        if (state.wallInstMesh) { scene.remove(state.wallInstMesh); state.wallInstMesh.geometry.dispose(); state.wallInstMesh = null; }
+        if (window.instNature) { Object.values(window.instNature).forEach(m => { scene.remove(m); m.geometry.dispose(); }); window.instNature = null; }
+        if (window.environmentObjects) { window.environmentObjects.forEach(obj => { scene.remove(obj); if (obj.geometry) obj.geometry.dispose(); }); window.environmentObjects = []; }
+
+        const theme = getTheme(); const cfg = state.terrainConfig || {};
+        const cols = state.gridCols; const rows = state.gridRows; const spacingX = Math.sqrt(3); const spacingY = 1.5; const offsetX = (cols * spacingX) / 2; const offsetY = (rows * spacingY) / 2;
+        const materials = createProceduralMaterials(theme); const groundMat = materials[1];
+        const planeGeo = new THREE.PlaneGeometry(cols * spacingX * 3, rows * spacingY * 3, 128, 128); planeGeo.rotateX(-Math.PI / 2);
+
+        state.spacingX = spacingX; state.spacingY = spacingY; state.offsetX = offsetX; state.offsetY = offsetY; state.getH = (r, c) => getComputedHeight(r, c, rows, cols, state.mapSeed);
+        state.getNormal = (r, c) => { const step = 0.05; const h = state.getH(r, c); const v1 = new THREE.Vector3(step * spacingX, state.getH(r, c + step) - h, 0); const v2 = new THREE.Vector3(0, state.getH(r + step, c) - h, step * spacingY); return new THREE.Vector3().crossVectors(v2, v1).normalize(); };
+
+        const posAttr = planeGeo.attributes.position;
+        for (let i = 0; i < posAttr.count; i++) posAttr.setY(i, getComputedHeight((posAttr.getZ(i) + offsetY) / spacingY, (posAttr.getX(i) + offsetX) / spacingX, rows, cols, state.mapSeed, 'island'));
+        planeGeo.computeVertexNormals(); terrainMesh = new THREE.Mesh(planeGeo, groundMat); terrainMesh.receiveShadow = true; scene.add(terrainMesh); state.terrainMesh = terrainMesh;
+
+        const waterMat = new THREE.MeshStandardMaterial({ color: theme.colors.water, transparent: true, opacity: 0.8, emissive: theme.colors.water, emissiveIntensity: 0.1, roughness: 0.1, metalness: 0.8 });
+        waterMat.onBeforeCompile = (shader) => {
+            shader.uniforms.time = { value: 0 }; shader.uniforms.amplitude = { value: cfg.waveAmplitude }; shader.uniforms.speed = { value: cfg.waveSpeed }; state.waterUniforms = shader.uniforms;
+            shader.vertexShader = `uniform float time; uniform float amplitude; uniform float speed; varying float vWaveHeight;\n` + shader.vertexShader;
+            shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\n float t = time * speed; float wave = abs(sin(position.x * 0.2 + t)) * amplitude + abs(cos(position.y * 0.2 + t * 0.8)) * amplitude + sin(position.x * 0.5 + position.y * 0.5 + t * 1.5) * (amplitude * 0.2); transformed.z += wave; vWaveHeight = wave;`);
+            shader.fragmentShader = `varying float vWaveHeight;\n` + shader.fragmentShader;
+            shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>\n float foam = smoothstep(0.4, 0.9, vWaveHeight); diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.98, 1.0), foam * 0.8);`);
+        };
+        const waterPlane = new THREE.Mesh(new THREE.PlaneGeometry(15000, 15000, 96, 96), waterMat); waterPlane.rotateX(-Math.PI / 2); waterPlane.position.y = cfg.waterHeight; scene.add(waterPlane); window.environmentObjects.push(waterPlane);
+
+        const hexInstMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.96, 0.96, 0.1, 6), new THREE.MeshStandardMaterial({ color: theme.colors.groundTop, transparent: true, opacity: 0.2 }), rows * cols);
+        hexInstMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); hexInstMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(rows * cols * 3), 3); scene.add(hexInstMesh); state.hexInstMesh = hexInstMesh;
+
+        const wallInstMesh = new THREE.InstancedMesh(buildWallGeometry(0.95, 0.8, 0.15), new THREE.MeshStandardMaterial({ color: theme.colors.castle, roughness: 0.6, metalness: 0.1, flatShading: true }), rows * cols * 6);
+        wallInstMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); wallInstMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(rows * cols * 6 * 3), 3); scene.add(wallInstMesh); state.wallInstMesh = wallInstMesh;
+
+        let hexIdx = 0; const dummy = new THREE.Object3D(); window.baseModels = new Map();
+        state.grid.forEach((row, r) => row.forEach((cell, c) => {
+            if (!cell.active) return;
+            const x = (c * spacingX) + (r % 2 !== 0 ? spacingX / 2 : 0) - offsetX; const z = (r * spacingY) - offsetY; const h = state.getH((z + offsetY) / spacingY, (x + offsetX) / spacingX);
+            dummy.position.set(x, h + 0.1, z); dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), state.getNormal((z + offsetY) / spacingY, (x + offsetX) / spacingX)); dummy.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 6 + Math.PI / 2));
+            dummy.scale.setScalar(h >= 0.1 ? 1 : 0); dummy.updateMatrix(); hexInstMesh.setMatrixAt(hexIdx, dummy.matrix);
+            const meshProxy = { userData: { r, c, hexIdx } }; tileMeshes.push(meshProxy); window.tileMap.set(`${r},${c}`, meshProxy);
+
+            if (cell.base) {
+                const mat = new THREE.MeshStandardMaterial({ color: theme.colors.castle });
+                const mesh = new THREE.Mesh(buildPrototype('castle'), mat);
+                mesh.position.copy(dummy.position); mesh.quaternion.copy(dummy.quaternion); mesh.scale.setScalar(1.5); scene.add(mesh); window.baseModels.set(`${r},${c}`, mesh);
+            }
+            hexIdx++;
+        }));
+        hexInstMesh.instanceMatrix.needsUpdate = true; hexInstMesh.count = hexIdx;
+        updateBoard3D(); fitCamera();
+    }
+
+    const assets = { tree: [], rock: [], house: [], castle: [], castleWall: [], knight: null };
+    function loadAssets(callback) { callback(); }
+
+    function updateWalls() {
+        if (!state.wallInstMesh || !state.grid) return;
+        const wallDummy = new THREE.Object3D(); const { spacingX, spacingY, offsetX, offsetY, getH, getNormal, gridCols, gridRows } = state; const theme = getTheme();
+        state.grid.forEach((row, r) => row.forEach((cell, c) => {
+            const x = (c * spacingX) + (r % 2 !== 0 ? spacingX / 2 : 0) - offsetX; const z = (r * spacingY) - offsetY;
+            ((r % 2 !== 0) ? [{dr:0,dc:1},{dr:1,dc:1},{dr:1,dc:0},{dr:0,dc:-1},{dr:-1,dc:0},{dr:-1,dc:1}] : [{dr:0,dc:1},{dr:1,dc:0},{dr:1,dc:-1},{dr:0,dc:-1},{dr:-1,dc:-1},{dr:-1,dc:0}]).forEach((nPos, i) => {
+                const nr = r + nPos.dr; const nc = c + nPos.dc; let isBoundary = false;
+                if (cell.owner) { if (nr < 0 || nr >= gridRows || nc < 0 || nc >= gridCols) isBoundary = true; else { const nCell = state.grid[nr][nc]; if (!nCell || !nCell.active || nCell.owner !== cell.owner) isBoundary = true; } }
+                const idx = (r * gridCols + c) * 6 + i;
+                if (isBoundary) {
+                    const angle = (i * 60) * (Math.PI / 180); const wx = x + Math.cos(angle) * 0.866 * 0.92; const wz = z + Math.sin(angle) * 0.866 * 0.92;
+                    wallDummy.position.set(wx, getH((wz + offsetY) / spacingY, (wx + offsetX) / spacingX) - 0.1, wz); wallDummy.scale.setScalar(1);
+                    const normal = getNormal((wz + offsetY) / spacingY, (wx + offsetX) / spacingX); const t = new THREE.Vector3().crossVectors(normal, new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle))).normalize();
+                    wallDummy.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(t, normal, new THREE.Vector3().crossVectors(t, normal))); wallDummy.updateMatrix();
+                    state.wallInstMesh.setMatrixAt(idx, wallDummy.matrix); state.wallInstMesh.setColorAt(idx, cell.owner ? new THREE.Color(state.players.find(p => p.id === cell.owner).color) : new THREE.Color(theme.colors.castle));
+                } else { wallDummy.scale.setScalar(0); wallDummy.updateMatrix(); state.wallInstMesh.setMatrixAt(idx, wallDummy.matrix); }
+            });
+        }));
+        state.wallInstMesh.instanceMatrix.needsUpdate = true; state.wallInstMesh.instanceColor.needsUpdate = true;
+    }
+
+    function updateBoard3D(targetMesh = null) {
+        if (tileMeshes.length === 0 || !state.hexInstMesh) return;
+        if (!window.cachedValidMoves) window.cachedValidMoves = new Set();
+        if (!targetMesh) { window.cachedValidMoves.clear(); if (state.phase === 'planning') getValidMoves(state.myId, state.grid).forEach(m => window.cachedValidMoves.add(`${m.r},${m.c}`)); }
+        state.battleIcons = []; if (state.phase === 'resolution' && !targetMesh) Object.keys(state.roundMoves).forEach(pid => { const m = window.tileMap ? window.tileMap.get(`${state.roundMoves[pid].r},${state.roundMoves[pid].c}`) : null; if (m) state.battleIcons.push({ mesh: m, color: state.players.find(p => p.id === pid).color }); });
+
+        const colorTop = new THREE.Color(getTheme().colors.groundTop);
+        const updateInst = (mesh) => {
+            const { r, c, hexIdx } = mesh.userData; const cell = state.grid[r][c];
+            let targetColor = colorTop.clone();
+            if (cell.owner && state.phase !== 'start') targetColor = new THREE.Color(state.players.find(p => p.id === cell.owner)?.color || 0xffffff);
+            else if (window.cachedValidMoves.has(`${r},${c}`) && state.phase === 'planning') targetColor.addScalar(0.2);
+            if (mesh === state.hoveredTile) targetColor.addScalar(0.2);
+            if ((state.phase === 'planning' || state.phase === 'question') && state.roundMoves[state.myId]?.r === r && state.roundMoves[state.myId]?.c === c) targetColor.setHex(0x000000);
+            state.hexInstMesh.setColorAt(hexIdx, targetColor);
+            if (window.baseModels && window.baseModels.get(`${r},${c}`)) { const m = window.baseModels.get(`${r},${c}`); m.visible = cell.base; if (cell.base) m.traverse(ch => { if (ch.isMesh && ch.material) { if (!ch.userData.cloned) { ch.material = ch.material.clone(); ch.userData.cloned = true; } ch.material.color.copy(targetColor); }}); }
+        };
+        if (targetMesh) updateInst(targetMesh); else { tileMeshes.forEach(updateInst); updateWalls(); }
+        state.hexInstMesh.instanceColor.needsUpdate = true;
+    }
+
+    function updateMinimap() {
+        const canvas = document.getElementById('minimap-canvas'); if (!canvas || !state.grid) return;
+        const ctx = canvas.getContext('2d'); const w = canvas.width; const h = canvas.height; ctx.clearRect(0, 0, w, h);
+        const scale = Math.min((w - 40) / (state.gridCols * Math.sqrt(3)), (h - 40) / (state.gridRows * 1.5));
+        state.grid.forEach((row, r) => row.forEach((cell, c) => {
+            if (!cell.active) return;
+            const px = w / 2 + ((c * Math.sqrt(3)) + (r % 2 !== 0 ? Math.sqrt(3) / 2 : 0) - (state.gridCols * Math.sqrt(3)) / 2) * scale;
+            const py = h / 2 + ((r * 1.5) - (state.gridRows * 1.5) / 2) * scale;
+            ctx.fillStyle = cell.owner ? (state.players.find(pl => pl.id === cell.owner)?.color || '#fff') : '#334155';
+            ctx.beginPath(); ctx.arc(px, py, scale * 0.8, 0, Math.PI * 2); ctx.fill();
+        }));
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        const delta = clock.getDelta(); const time = clock.getElapsedTime();
+        controls.update(); updateMinimap();
+        if (state.waterUniforms) state.waterUniforms.time.value = time;
+        updateHUDTimers();
+        if (state.timerEnd) state.planningTime = Math.max(0, (state.timerEnd - Date.now()) / 1000);
+        else if (state.phase === 'planning' || state.phase === 'question') state.planningTime = Math.max(0, state.planningTime - delta);
+
+        if (state.isHost && state.phase === 'planning' && state.planningTime <= 0) {
+            state.planningTime = 0; state.timerEnd = 0;
+            state.players.forEach(p => { if (!state.roundMoves[p.id]) { const m = getValidMoves(p.id, state.grid); if (m.length > 0) handlePlayerSelect(m[0].r, m[0].c, p.id); }});
+            triggerQuestion();
+        }
+
+        const target = getTargetHex(mouse);
+        if (target !== state.hoveredTile) { const old = state.hoveredTile; state.hoveredTile = target; if (old) updateBoard3D(old); if (target) updateBoard3D(target); }
+        raycaster.setFromCamera(mouse, camera); syncBattleIcons(); renderer.render(scene, camera);
+    }
+
+    function syncBattleIcons() {
+        const container = document.getElementById('ui-layer'); document.querySelectorAll('.battle-icon').forEach(el => el.remove());
+        if (!state.hexInstMesh) return;
+        const mat4 = new THREE.Matrix4();
+        state.battleIcons.forEach(iconData => {
+            state.hexInstMesh.getMatrixAt(iconData.mesh.userData.hexIdx, mat4);
+            const pos = new THREE.Vector3().setFromMatrixPosition(mat4); pos.y += 2; pos.project(camera);
+            const x = (pos.x * .5 + .5) * window.innerWidth; const y = (pos.y * -.5 + .5) * window.innerHeight;
+            if (pos.z < 1 && x > 0 && x < window.innerWidth && y > 0 && y < window.innerHeight) {
+                const el = document.createElement('div'); el.className = 'battle-icon text-4xl absolute'; el.style.left = `${x}px`; el.style.top = `${y}px`; el.style.color = iconData.color; el.innerHTML = '⚔️'; container.appendChild(el);
+            }
+        });
+    }
+
+    function initGame() {
+        state.grid = Array(state.gridRows).fill().map((_, r) => Array(state.gridCols).fill().map((_, c) => {
+            const h = getComputedHeight(r, c, state.gridRows, state.gridCols, state.mapSeed);
+            return { owner: null, base: false, active: h >= 0.1, terrainHeight: h, isForest: h >= 0.1 && Math.random() > 0.8 };
+        }));
+        let validCells = []; state.grid.forEach((r, ri) => r.forEach((c, ci) => { if (c.active && !c.isForest) validCells.push({ r: ri, c: ci }); }));
+        const shuffled = [...validCells].sort(() => Math.random() - 0.5);
+        state.players.forEach(p => { if (shuffled.length) { const pos = shuffled.pop(); state.grid[pos.r][pos.c].owner = p.id; state.grid[pos.r][pos.c].base = true; state.grid[pos.r][pos.c].terrainHeight = 2; } });
+        state.scores = {}; state.allPlayerStats = {};
+        state.players.forEach(p => { state.scores[p.id] = 1; state.allPlayerStats[p.id] = { correct: 0, wrong: 0, bonus: 0 }; });
+        state.phase = 'planning'; state.phaseStartTime = Date.now(); state.currentRound = 1; state.roundMoves = {};
+        if (state.isHost && state.isMultiplayer) { state.planningTime = 30; network.socket.emit("start_timer", { duration: 30, phase: 'planning' }); } else { state.planningTime = 30; state.timerEnd = Date.now() + 30000; }
+        initBoard(); renderUI();
+    }
+
+    function getValidMoves(pid, currentGrid) {
+        const myCells = []; currentGrid.forEach((row, ri) => row.forEach((cell, ci) => { if (cell.active && cell.owner === pid) myCells.push({ r: ri, c: ci }) }));
+        if (myCells.length === 0) { const res = []; currentGrid.forEach((row, ri) => row.forEach((cell, ci) => { if (cell.active && !cell.owner) res.push({ r: ri, c: ci }); })); return res; }
+        const moves = new Set();
+        myCells.forEach(cell => {
+            ((cell.r % 2 !== 0) ? [[0, 1], [1, 1], [1, 0], [0, -1], [-1, 0], [-1, 1]] : [[0, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0]]).forEach(([dr, dc]) => {
+                const nr = cell.r + dr, nc = cell.c + dc;
+                if (nr >= 0 && nr < state.gridRows && nc >= 0 && nc < state.gridCols && currentGrid[nr][nc].active && currentGrid[nr][nc].owner !== pid) moves.add(`${nr},${nc}`);
+            });
+        });
+        return Array.from(moves).map(s => { const p = s.split(','); return { r: parseInt(p[0]), c: parseInt(p[1]) }; });
+    }
+
+    function handlePlayerSelect(r, c, remotePid) {
+        const pid = remotePid || state.myId; if (isEliminated() && pid === state.myId) return;
+        if (state.phase !== 'planning') { if (pid === state.myId) state.isSelecting = false; return; }
+        if (pid === state.myId && (state.blockInput || state.isSelecting)) return;
+        if (!getValidMoves(pid, state.grid).some(m => m.r === r && m.c === c)) return;
+        state.roundMoves[pid] = { r, c }; updateBoard3D(); renderUI();
+        if (state.isMultiplayer) {
+            if (state.isHost) {
+                if (Object.keys(state.roundMoves).length >= state.players.filter(p => !p.eliminated).length) { triggerQuestion(); network.broadcast({ type: 'STATE_SYNC', state: network.getSyncData() }); }
+            } else if (pid === state.myId) { state.isSelecting = true; network.sendToHost({ type: 'ACTION_SUBMIT', action: 'selectTile', r, c }); }
+        }
+    }
+
+    function triggerQuestion() {
+        if (state.phase === 'question') return;
+        state.phase = 'question'; state.phaseStartTime = Date.now(); state.battleMsg = null; state.roundResults = {}; state.hasAnsweredLocally = false; state.selectedAnswerIdx = null;
+        if (state.isHost) network.socket.emit("start_timer", { duration: 30, phase: 'question' });
+        const pool = state.questions.filter(q => !state.usedQuestionIds.has(q.id));
+        if (pool.length === 0) { state.usedQuestionIds.clear(); }
+        state.currentQuestion = (pool.length > 0 ? pool : state.questions)[Math.floor(Math.random() * (pool.length > 0 ? pool.length : state.questions.length))];
+        state.usedQuestionIds.add(state.currentQuestion.id);
+        renderUI(); if (state.isHost && state.isMultiplayer) network.broadcast({ type: 'STATE_SYNC', state: network.getSyncData() });
+    }
+
+    function handleAnswer(answer, remotePid) {
+        const pid = remotePid || state.myId; if (isEliminated() && pid === state.myId) return;
+        if (pid === state.myId && Date.now() - state.phaseStartTime < 1000) return;
+        if (state.isHost && state.roundResults && state.roundResults[pid] !== undefined) return;
+        if (!state.isHost && pid === state.myId && state.hasAnsweredLocally) return;
+
+        if (state.isMultiplayer) {
+            if (state.isHost) {
+                const isCorrect = state.currentQuestion.type === 'multiple' ? answer === state.currentQuestion.correct : answer?.toString().trim().toLowerCase() === state.currentQuestion.correct.toString().trim().toLowerCase();
+                if (!state.allPlayerStats) state.allPlayerStats = {}; if (!state.allPlayerStats[pid]) state.allPlayerStats[pid] = { correct: 0, wrong: 0, bonus: 0 };
+                if (isCorrect) state.allPlayerStats[pid].correct++; else state.allPlayerStats[pid].wrong++;
+                if (!state.roundResults) state.roundResults = {}; state.roundResults[pid] = isCorrect;
+
+                const activeMovers = Object.keys(state.roundMoves).filter(id => state.players.some(p => p.id === id && !p.eliminated));
+                state.battleMsg = `ОТГОВОРИ: ${activeMovers.filter(id => state.roundResults[id] !== undefined).length} / ${activeMovers.length}`;
+                if (Object.keys(state.roundResults).length >= activeMovers.length) {
+                    state.phase = 'resolution'; state.battleMsg = "РЕЗУЛТАТИ!"; network.broadcast({ type: 'STATE_SYNC', state: network.getSyncData() }); renderUI();
+                    setTimeout(() => { state.battleMsg = null; executeMultiResolution(state.roundResults); state.roundResults = null; state.hasAnsweredLocally = false; network.broadcast({ type: 'STATE_SYNC', state: network.getSyncData() }); renderUI(); }, 2000);
+                } else network.broadcast({ type: 'STATE_SYNC', state: network.getSyncData() });
+            } else { state.hasAnsweredLocally = true; network.sendToHost({ type: 'ACTION_SUBMIT', action: 'answer', answer }); }
+        }
+        renderUI();
+    }
+
+    function executeMultiResolution(results) {
+        const newScores = { ...state.scores }; const eliminatedIdx = new Set();
+        Object.entries(state.roundMoves).forEach(([pid, move]) => {
+            if (!results[pid]) return; const target = state.grid[move.r][move.c];
+            if (target.base && target.owner && target.owner !== pid) {
+                const victimId = target.owner; eliminatedIdx.add(victimId); if (victimId === state.myId) state.phase = 'gameover';
+                state.grid.forEach(row => row.forEach(cell => { if (cell.owner === victimId) { cell.owner = pid; cell.base = false; newScores[pid] = (newScores[pid] || 0) + 1; newScores[victimId] = (newScores[victimId] || 0) - 1; } }));
+            }
+        });
+        Object.entries(state.roundMoves).forEach(([pid, move]) => {
+            if (!results[pid] || eliminatedIdx.has(pid)) return; const target = state.grid[move.r][move.c];
+            if (target.owner === pid) return; if (target.owner) newScores[target.owner]--; target.owner = pid; newScores[pid]++;
+        });
+        state.scores = newScores; state.battleMsg = null; state.roundResults = {}; state.hasAnsweredLocally = false;
+        state.players.forEach(p => { if (eliminatedIdx.has(p.id)) p.eliminated = true; });
+        const winners = new Set(state.grid.flat().filter(c => c.base).map(c => c.owner).filter(o => !!o));
+        if (winners.size === 1) state.phase = 'victory';
+        else { state.phase = 'planning'; if (state.isHost) network.socket.emit("start_timer", { duration: 30, phase: 'planning' }); state.currentRound++; state.roundMoves = {}; state.hasAnsweredLocally = false; state.isSelecting = false; }
+        updateBoard3D();
+    }
+
+    window.handlePlayerSelect = handlePlayerSelect;
+    window.handleAnswer = handleAnswer;
+
+    function renderUI() {
+        const ui = document.getElementById('ui-layer'); const theme = getTheme(); let html = '';
+        ui.style.pointerEvents = ['start', 'lobby', 'victory', 'question'].includes(state.phase) ? 'auto' : 'none';
+        if (state.phase === 'victory') html = `<div class="flex flex-col items-center justify-center min-h-screen bg-stone-950/95 pointer-events-auto relative z-50 animate-in fade-in duration-700 font-serif"><h1 class="text-4xl md:text-6xl font-black text-amber-500 mb-8 uppercase tracking-[0.2em]">Победител!</h1><button onclick="location.reload()" class="px-10 py-4 ${theme.btnPrimary} font-black text-xl shadow-[0_0_30px_rgba(180,83,9,0.5)] transition-all hover:scale-105 active:scale-95 uppercase tracking-widest">Нова Кампания</button></div>`;
+        else if (state.phase === 'gameover') html = `<div class="flex flex-col items-center justify-center min-h-screen bg-stone-950/95 pointer-events-auto relative z-50 animate-in zoom-in duration-300 font-serif"><h1 class="text-5xl md:text-7xl font-black text-red-800 mb-8 uppercase tracking-[0.2em] border-b-2 border-red-900 pb-4">КРАХ НА ИМПЕРИЯТА</h1><button onclick="location.reload()" class="px-10 py-4 bg-stone-800 hover:bg-stone-700 text-amber-500 border border-amber-900 font-black text-xl shadow-xl transition-all hover:scale-105 uppercase tracking-widest">Започни отначало</button></div>`;
+        else if (state.phase === 'planning' || state.phase === 'question') {
+            const q = state.currentQuestion; const hasAns = isEliminated() || !!(state.isMultiplayer ? (state.roundResults && state.roundResults[state.myId] !== undefined) : state.hasAnsweredLocally);
+            html = `<div class="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-4 md:p-6 font-serif">
+                <div class="flex justify-between items-start w-full gap-1 md:gap-4">
+                    <div class="bg-stone-900/90 backdrop-blur-md p-3 border-2 border-amber-900/50 shadow-[0_4px_20px_rgba(0,0,0,0.8)] min-w-[140px] md:min-w-[200px] pointer-events-auto">
+                        <h4 class="text-[10px] text-amber-600 uppercase font-black mb-3 px-2 tracking-[0.2em] flex items-center gap-2 border-b border-amber-900/30 pb-2">ФРАКЦИИ</h4>
+                        <div class="space-y-2">${state.players.map(p => `<div class="flex items-center gap-3 p-2 transition-all border ${state.roundMoves[p.id] ? 'bg-amber-900/20 border-amber-500/50 shadow-[inset_0_0_10px_rgba(217,119,6,0.2)]' : 'bg-stone-950/50 border-stone-800'}"><div class="w-3.5 h-3.5 border border-stone-950 shadow-[0_0_8px_rgba(0,0,0,0.8)]" style="background-color: ${p.color}"></div><span class="font-bold text-xs text-amber-100 truncate max-w-[100px] drop-shadow-md tracking-wider">${p.name}</span><div class="ml-auto bg-stone-950 px-2 py-0.5 text-[10px] font-mono font-black text-amber-500 border border-amber-900/50 shadow-inner">${state.scores[p.id] || 0}</div></div>`).join('')}</div>
+                    </div>
+                    ${state.phase === 'planning' ? `<div class="pointer-events-auto flex flex-col items-center shrink-0 mx-auto"><div class="bg-stone-900/90 backdrop-blur-md px-6 md:px-12 py-3 md:py-4 border-4 border-double border-amber-700 shadow-[0_10px_40px_rgba(0,0,0,0.8)] flex flex-col items-center transition-all hover:scale-105"><span class="text-[8px] md:text-[10px] uppercase font-black text-amber-600 tracking-[0.4em] mb-1">ПЯСЪЧЕН ЧАСОВНИК</span><span id="hud-timer-val" class="text-4xl md:text-5xl font-mono font-black ${state.planningTime < 5 ? 'text-red-600 animate-pulse' : 'text-amber-400'} drop-shadow-md">${Math.ceil(state.planningTime)}</span></div></div>` : ''}
+                </div></div>
+                <div class="absolute bottom-8 left-0 right-0 text-center z-10 pointer-events-none"><div class="inline-block ${theme.uiBg} px-8 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.9)]">${state.phase === 'planning' ? `<span class="text-amber-400 font-black tracking-widest uppercase text-sm drop-shadow-md">Избери територия, милорд!</span>` : ''}</div></div>
+                ${state.phase === 'question' ? `<div class="absolute inset-0 z-50 flex items-center justify-center bg-stone-950/80 backdrop-blur-sm p-4 pointer-events-auto font-serif"><div class="question-container ${theme.uiBg} w-full max-w-2xl shadow-[0_0_50px_rgba(0,0,0,0.9)] flex flex-col p-8 transition-all relative">
+                    ${hasAns ? `<div class="absolute inset-0 bg-stone-950/60 backdrop-blur-[2px] z-10 flex items-center justify-center"><div class="bg-stone-900 text-amber-500 px-8 py-4 border-2 border-amber-700/50 font-black uppercase tracking-widest text-center shadow-[0_0_30px_rgba(0,0,0,0.8)]">ОЧАКВАНЕ НА ВРАГОВЕТЕ...</div></div>` : `<div class="absolute top-4 right-8 bg-stone-950/80 px-4 py-2 border border-amber-900/50 shadow-inner"><span id="modal-timer-val" class="font-mono font-black text-2xl ${state.planningTime < 5 ? 'text-red-600' : 'text-amber-500'} drop-shadow-md">${Math.ceil(state.planningTime)}</span></div>`}
+                    <h2 class="text-xl md:text-2xl font-black mb-8 text-amber-400 text-center leading-relaxed tracking-wide drop-shadow-sm border-b border-amber-900/30 pb-6 mt-4">"${q.q}"</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">${q.answers.map((ans, idx) => `<button onclick="state.selectedAnswerIdx = ${idx}; renderUI()" ${hasAns ? 'disabled' : ''} class="p-5 font-bold text-sm md:text-base transition-all border-2 ${state.selectedAnswerIdx === idx ? 'bg-amber-900/80 text-amber-100 border-amber-500 shadow-[inset_0_0_15px_rgba(217,119,6,0.3)]' : `bg-stone-900/50 border-amber-900/50 text-amber-200 hover:bg-stone-800`} text-left flex items-center gap-4"><span class="w-8 h-8 flex-shrink-0 flex items-center justify-center font-black ${state.selectedAnswerIdx === idx ? 'bg-amber-700 text-stone-950' : 'bg-stone-950 border border-amber-900/50 text-amber-600'} text-xs font-mono shadow-inner">${String.fromCharCode(65 + idx)}</span><span>${ans}</span></button>`).join('')}</div>
+                    <button onclick="if(state.selectedAnswerIdx !== null) window.handleAnswer(state.selectedAnswerIdx)" ${hasAns || state.selectedAnswerIdx === null ? 'disabled' : ''} class="w-full py-6 mt-8 ${state.selectedAnswerIdx === null ? 'bg-stone-900 border border-stone-800 text-stone-700 cursor-not-allowed' : theme.btnPrimary} font-black text-xl shadow-[0_5px_15px_rgba(0,0,0,0.5)] transition-all uppercase tracking-[0.2em]">ИЗРЕЧИ ОТГОВОРА</button>
+                </div></div>` : ''}
+                ${state.battleMsg ? `<div class="absolute top-24 left-1/2 -translate-x-1/2 bg-stone-900/90 px-8 py-4 rounded-sm border-4 border-double border-amber-700 shadow-[0_0_30px_rgba(0,0,0,0.8)] z-50 pointer-events-auto"><span class="text-2xl font-black text-amber-500 tracking-widest drop-shadow-md">${state.battleMsg}</span></div>` : ''}
+            `;
+        }
+        ui.innerHTML = html;
+        if (window.lucide) window.lucide.createIcons();
+    }
+
+    function updateHUDTimers() {
+        const val = Math.ceil(state.planningTime);
+        const hud = document.getElementById('hud-timer-val'); const modal = document.getElementById('modal-timer-val');
+        if (hud) { hud.innerText = val; if (val < 5) hud.classList.add('text-red-500', 'animate-pulse'); else hud.classList.remove('text-red-500', 'animate-pulse'); }
+        if (modal) { modal.innerText = val; if (val < 5) modal.classList.add('text-red-500'); else modal.classList.remove('text-red-500'); }
+    }
+
+    window.startGameMultiplayer = function() {
+        state.players = [...state.playersPending];
+        state.mapSeed = Math.random() * 100;
+        state.usedQuestionIds = new Set();
+        initGame();
+        state.phaseStartTime = Date.now();
+        state.isSelecting = false;
+        state.roundMoves = {};
+        network.broadcast({ type: 'START_GAME', players: state.players, grid: state.grid, mapSeed: state.mapSeed, playerSkins: state.playerSkins, gridRows: state.gridRows, gridCols: state.gridCols, currentThemeId: state.currentThemeId });
+        renderUI();
+    };
+
+    // --- INTEGRATION: The Launch Bridge ---
+    window.launchKrusaderGame = function(roomData, isHost, userProfile, rCode) {
+        // 1. Hide React UI, Show Game UI
+        document.getElementById('root').style.display = 'none';
+        document.getElementById('game-container').style.display = 'block';
+
+        // 2. Hydrate Game State
+        state.isMultiplayer = true;
+        state.isHost = isHost;
+        state.roomCode = rCode;
+        state.myId = userProfile.id;
+        state.playerName = userProfile.name;
+        state.playerColor = userProfile.color;
+
+        // Populate Custom AI Questions if they exist
+        if (roomData.questions && roomData.questions.length > 0) {
+            state.questions = roomData.questions.map((q, i) => {
+                let correctIdx = q.options.indexOf(q.correctAnswer);
+                if (correctIdx === -1) correctIdx = 0;
+                return {
+                    id: 'ai_' + i,
+                    folderId: 'default',
+                    type: 'multiple',
+                    q: q.question,
+                    answers: q.options,
+                    correct: correctIdx
+                };
+            });
+        }
+
+        // Map Supabase lobby players directly to socket playersPending
+        state.playersPending = roomData.players.map((p, i) => ({
+            id: p.uid,
+            name: p.name,
+            color: p.color,
+            avatar: p.avatar,
+            type: 'player',
+            isHost: i === 0,
+            eliminated: false
+        }));
+
+        // 3. Init 3D World (Only once)
+        if (!window.gameInitialized) {
+            init();
+            window.gameInitialized = true;
+        }
+
+        // 4. Init Socket Connection
+        network.init(isHost, rCode, userProfile.id);
+    };
+
+</script>
+
+<script type="text/babel">
+    const { useState, useEffect, useRef, createContext, useContext, memo } = React;
+    const GameContext = createContext();
+    const useGame = () => useContext(GameContext);
+
+    // --- INITIALIZE SUPABASE WITH COOKIE STORAGE ---
+    const supabaseUrl = 'https://pgdouacnmevckpsfcbvt.supabase.co';
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBnZG91YWNubWV2Y2twc2ZjYnZ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE2NzEwNDksImV4cCI6MjA4NzI0NzA0OX0.tx4bjDzG2kti_MkZyrsJU9rz4BzDCl0uTlVoSnNH8oM';
+    
+    // 1. Create a custom storage adapter that uses document.cookie
+    const cookieStorage = {
+        getItem: (key) => {
+            const match = document.cookie.match(new RegExp('(^| )' + encodeURIComponent(key) + '=([^;]+)'));
+            return match ? decodeURIComponent(match[2]) : null;
+        },
+        setItem: (key, value) => {
+            // Sets the cookie to expire in 7 days (604800 seconds)
+            document.cookie = `${encodeURIComponent(key)}=${encodeURIComponent(value)}; max-age=604800; path=/; SameSite=Lax; Secure`;
+        },
+        removeItem: (key) => {
+            // Deletes the cookie by setting an expiration date in the past
+            document.cookie = `${encodeURIComponent(key)}=; max-age=-1; path=/;`;
+        }
+    };
+
+    // 2. Pass the custom storage into the Supabase client creation
+    const supabase = window.supabase.createClient(supabaseUrl, supabaseKey, {
+        auth: {
+            storage: cookieStorage,
+            storageKey: 'krusader-auth-token', // Custom name for your cookie
+            persistSession: true
+        }
+    });
+
+    // --- ICONS ---
+    const Icons = {
+        Swords: memo(({ className = "w-full h-full" }) => (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M14.5 17.5 3 6V3h3l11.5 11.5" /><path d="m13 19 6-6" /><path d="m16 16 4 4" /><path d="m19 21 1-1" /><path d="M14.5 6.5 18 3h3v3l-3.5 3.5" /><path d="m5 14 4 4" /><path d="m7 17-3 3" /><path d="m3 19 1 1" /></svg>
+        )),
+        Clock: memo(({ className = "w-full h-full" }) => (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></svg>
+        )),
+        Users: memo(({ className = "w-full h-full" }) => (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+        )),
+        Trophy: memo(({ className = "w-full h-full" }) => (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6" /><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18" /><path d="M4 22h16" /><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22" /><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22" /><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z" /></svg>
+        )),
+        Crown: memo(({ className = "w-full h-full" }) => (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7Z" /><path d="M4 18h16" /><path d="M4 21h16" /></svg>
+        )),
+        Shield: memo(({ className = "w-full h-full" }) => (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        )),
+        SettingsGear: memo(({ className = "w-full h-full" }) => (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        )),
+        Book: memo(({ className = "w-full h-full" }) => (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+        )),
+        Send: memo(({ className = "w-full h-full" }) => (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        )),
+        ChevronLeft: memo(({ className = "w-full h-full" }) => (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m15 18-6-6 6-6"/></svg>
+        )),
+        ChevronRight: memo(({ className = "w-full h-full" }) => (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m9 18 6-6-6-6"/></svg>
+        )),
+        AuthLogo: memo(({ className = "w-[50px] h-[50px]" }) => (
+            <svg className={className} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+        )),
+        Sparkles: memo(({ className = "w-full h-full" }) => (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
+        )),
+        Email: memo(({ className="w-full h-full" }) => <svg className={className} viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>),
+        Lock: memo(({ className="w-full h-full" }) => <svg className={className} viewBox="0 0 24 24" fill="currentColor"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>),
+        User: memo(({ className="w-full h-full" }) => <svg className={className} viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>)
+    };
+
+    // --- TRANSLATIONS ---
+    const translations = {
+        bg: {
+            title: "КРУСАДЕР", subtitle: "Свещената Викторина", selectMode: "ИЗБЕРЕТЕ СВОЯ ПОХОД", resumeTitle: "ЛЕТОПИС НА ИГРАТА",
+            resumeP1: "Krusader е уникална комбинация от мащабна стратегия и динамична викторина, в която знанието е основното ти оръжие. Всеки играч започва с малка територия и замък, като целта е да завладее целия свят чрез правилни отговори на въпроси от обща култура.",
+            resumeP2: "Битките се провеждат в реално време срещу двама опоненти. Успехът при атака зависи от точността и бързината ти. Изграждай защити, сключвай съюзи и разширявай империята си. В края печели този с най-много точки и най-голяма територия.",
+            modes: {
+                fiveMin: { title: "5 Минутен Блиц", desc: "Бързина и точност под обсада.", label: "СКОРОСТ", id: 'fiveMin' },
+                lastStanding: { title: "Кралска Битка", desc: "Само един ще носи короната.", label: "ОЦЕЛЯВАНЕ", id: 'lastStanding' },
+                teams: { title: "Братство", desc: "Заедно сме непобедими.", label: "КООП", id: 'teams' }
+            },
+            lobby: { waiting: "Очакваме доблестни рицари...", roomCode: "ШИФЪР НА ПОКОИТЕ", start: "ЗАПОЧНИ ПОХОДА", ready: "Готов", invite: "Покани Съюзник", you: "Вие", logout: "ИЗХОД", joinPrompt: "Имаш ли шифър?", joinBtn: "ВЛЕЗ", joinPlaceholder: "ШИФЪР", leave: "НАПУСНИ", toggleReady: "ГОТОВ ЗА БОЙ", waitingOthers: "ИЗЧАКВАНЕ НА ОСТАНАЛИТЕ...", divineScroll: "СВЕЩЕН СВИТЪК (ИИ)", generate: "✨ СЪЗДАЙ", summoning: "ПРИЗОВАВАНЕ...", topicPlaceholder: "ТЕМА (напр. Древен Рим)", questionsForged: "Въпроса са Изковани!", awaitingHost: "Изчакваме водача да призове знанието...", awaitingScroll: "ИЗКОВИ СВИТЪК ПЪРВО" },
+            auth: { login: "Krusader Вход", register: "Нова Регистрация", email: "Имейл Адрес", pass: "Тайна Парола", name: "Име на Воин", enter: "Влез в Царството", forge: "Създай Профил", or: "ИЛИ", google: "Google Съюз", guest: "Влез като Гост", notSworn: "Все още не си заклел?", takeOath: "Положи Клетва", sworn: "Вече си регистриран?", openGate: "Отвори Портата" },
+            armory: { title: "ОРЪЖЕЙНА", name: "РИЦАРСКО ИМЕ", avatar: "ОБЛИК", color: "ЦВЯТ НА ЩИТА", save: "ЗАПАЗИ ПРОМЕНИТЕ", skin: "КОЖА", hair: "КОСА", hairColor: "ЦВЯТ НА КОСАТА", eyes: "ОЧИ", mouth: "УСТА/УШИ" },
+            tavern: { title: "КРЪЧМАТА", placeholder: "Изпрати вест...", send: "ПРАТИ" },
+            codex: { title: "КОДЕКС НА БИТКАТА", close: "ЗАТВОРИ", rule1: "Бързина и точност под обсада. 5 минути. Най-висок резултат печели.", rule2: "Оцеляване. Грешен отговор = щета. Последният оцелял печели.", rule3: "Отборна битка. Заедно събирате ресурси и защитавате замъка." },
+            settings: { title: "ВОЕНЕН СЪВЕТ", sound: "Звукови Ефекти", fx: "Визуални Ефекти (Искри)" }
+        },
+        en: {
+            title: "KRUSADER", subtitle: "The Holy Quiz", selectMode: "CHOOSE YOUR CRUSADE", resumeTitle: "GAME CHRONICLES",
+            resumeP1: "Krusader is a unique combination of grand strategy and a dynamic quiz, where knowledge is your main weapon. Each player starts with a small territory and a castle, aiming to conquer the world by answering general knowledge questions correctly.",
+            resumeP2: "Battles take place in real-time against opponents. Success in attacks depends on your accuracy and speed. Build defenses, forge alliances, and expand your empire. The ultimate winner is the one with the most points and the largest territory.",
+            modes: {
+                fiveMin: { title: "5 Minute Blitz", desc: "Speed and precision under siege.", label: "SPEED", id: 'fiveMin' },
+                lastStanding: { title: "King's Battle", desc: "Only one shall wear the crown.", label: "SURVIVAL", id: 'lastStanding' },
+                teams: { title: "Brotherhood", desc: "Together we are invincible.", label: "CO-OP", id: 'teams' }
+            },
+            lobby: { waiting: "Awaiting valiant knights...", roomCode: "CHAMBER CODE", start: "BEGIN CRUSADE", ready: "Ready", invite: "Invite Ally", you: "You", logout: "ABANDON POST", joinPrompt: "Join a Chamber?", joinBtn: "ENTER", joinPlaceholder: "CIPHER", leave: "RETREAT", toggleReady: "CONFIRM READINESS", waitingOthers: "WAITING FOR OTHERS...", divineScroll: "DIVINE SCROLL (AI)", generate: "✨ GENERATE", summoning: "SUMMONING...", topicPlaceholder: "TOPIC (e.g. Ancient Rome)", questionsForged: "Questions Forged!", awaitingHost: "Awaiting Host to summon knowledge...", awaitingScroll: "FORGE SCROLL FIRST" },
+            auth: { login: "Krusader Login", register: "New Registry", email: "Email Address", pass: "Passphrase", name: "Warrior Name", enter: "Enter the Realm", forge: "Forge Account", or: "OR", google: "Google Alliance", guest: "Enter as Guest", notSworn: "Not yet sworn?", takeOath: "Take the Oath", sworn: "Already registered?", openGate: "Open Gate" },
+            armory: { title: "THE ARMORY", name: "KNIGHT NAME", avatar: "APPEARANCE", color: "SHIELD COLOR", save: "SAVE CHANGES", skin: "SKIN", hair: "HAIR", hairColor: "HAIR COLOR", eyes: "EYES", mouth: "MOUTH/LIPS" },
+            tavern: { title: "THE TAVERN", placeholder: "Send a missive...", send: "SEND" },
+            codex: { title: "BATTLE CODEX", close: "CLOSE", rule1: "Speed and precision under siege. 5 minutes. Highest score wins.", rule2: "Survival. Wrong answer = damage. Last standing wins.", rule3: "Team battle. Cooperate to gather resources and defend the castle." },
+            settings: { title: "WAR COUNCIL", sound: "Sound Effects", fx: "Visual FX (Embers)" }
+        }
+    };
+
+    // --- GLOBAL TOAST ---
+    const ToastManager = { show: () => {} };
+    const ToastContainer = () => {
+        const [toast, setToast] = useState({ msg: '', visible: false });
+        useEffect(() => {
+            let timer;
+            ToastManager.show = (msg) => {
+                setToast({ msg, visible: true });
+                clearTimeout(timer);
+                timer = setTimeout(() => setToast({ msg: '', visible: false }), 3000);
+            };
+        }, []);
+        return (
+            <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 bg-[#1a150e] text-white px-8 py-4 border-2 border-[#8f6e30] rounded shadow-2xl z-[1000] font-cinzel transition-all duration-400 flex items-center gap-3 ${toast.visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10 pointer-events-none'}`}>
+                <span>⚔</span> {toast.msg} <span>⚔</span>
+            </div>
+        );
+    };
+
+    // --- OPTIMIZED: REALISTIC EMBERS CANVAS BACKGROUND ---
+    const EmbersCanvas = memo(() => {
+        const canvasRef = useRef(null);
+        useEffect(() => {
+            const canvas = canvasRef.current;
+            const ctx = canvas.getContext('2d');
+            let width, height, animationId;
+            let particles = [];
+            let mouseX = 0, mouseY = 0, isMouseActive = false;
+
+            const preRenderedEmbers = [];
+            for(let i=0; i<5; i++) {
+                const offCanvas = document.createElement('canvas');
+                offCanvas.width = 30; offCanvas.height = 30;
+                const oCtx = offCanvas.getContext('2d');
+                const gValue = Math.floor(80 + (i * 20));
+                const grad = oCtx.createRadialGradient(15, 15, 0, 15, 15, 15);
+                grad.addColorStop(0, `rgba(255, 255, 255, 1)`);
+                grad.addColorStop(0.2, `rgba(255, ${gValue}, 10, 1)`);
+                grad.addColorStop(1, `rgba(255, ${gValue}, 10, 0)`);
+                oCtx.fillStyle = grad;
+                oCtx.arc(15, 15, 15, 0, Math.PI * 2);
+                oCtx.fill();
+                preRenderedEmbers.push(offCanvas);
+            }
+
+            const resize = () => { width = canvas.width = window.innerWidth; height = canvas.height = window.innerHeight; };
+
+            const handleMouseMove = (e) => { mouseX = e.clientX; mouseY = e.clientY; isMouseActive = true; };
+            const handleMouseLeave = () => { isMouseActive = false; };
+            window.addEventListener('mousemove', handleMouseMove);
+            window.addEventListener('mouseleave', handleMouseLeave);
+
+            class Particle {
+                constructor() { this.reset(); }
+                reset() {
+                    this.x = Math.random() * width; this.y = height + Math.random() * 100;
+                    this.baseVx = (Math.random() - 0.5) * 0.5; this.baseVy = -Math.random() * 2 - 0.5;
+                    this.vx = this.baseVx; this.vy = this.baseVy;
+                    this.size = Math.random() * 3 + 1.5; this.life = Math.random() * 100 + 100;
+                    this.opacity = Math.random() * 0.5 + 0.2;
+                    this.emberImg = preRenderedEmbers[Math.floor(Math.random() * preRenderedEmbers.length)];
+                }
+                update() {
+                    if (isMouseActive) {
+                        const dx = this.x - mouseX; const dy = this.y - mouseY;
+                        if (Math.abs(dx) < 150 && Math.abs(dy) < 150) {
+                            const dist = Math.sqrt(dx * dx + dy * dy);
+                            if (dist < 150) {
+                                const force = (150 - dist) / 150;
+                                this.vx += (dx / dist) * force * 0.6; this.vy -= force * 0.6;
+                            }
+                        }
+                    }
+                    this.vx += (this.baseVx - this.vx) * 0.05; this.vy += (this.baseVy - this.vy) * 0.05;
+                    this.x += this.vx; this.y += this.vy;
+                    this.life--; this.opacity -= 0.003;
+                    if (this.life <= 0 || this.opacity <= 0 || this.y < -10 || this.x < -10 || this.x > width + 10) this.reset();
+                }
+                draw() {
+                    ctx.globalAlpha = this.opacity;
+                    ctx.drawImage(this.emberImg, this.x - this.size * 2, this.y - this.size * 2, this.size * 4, this.size * 4);
+                }
+            }
+            const initParticles = () => { resize(); particles = Array.from({length: 100}, () => { const p = new Particle(); p.y = Math.random() * height; return p; }); };
+
+            const animate = () => {
+                ctx.clearRect(0, 0, width, height);
+                ctx.globalCompositeOperation = 'screen';
+                particles.forEach(p => { p.update(); p.draw(); });
+                ctx.globalAlpha = 1.0;
+                animationId = requestAnimationFrame(animate);
+            };
+
+            window.addEventListener('resize', resize);
+            initParticles(); animate();
+
+            return () => {
+                window.removeEventListener('resize', resize);
+                window.removeEventListener('mousemove', handleMouseMove);
+                window.removeEventListener('mouseleave', handleMouseLeave);
+                cancelAnimationFrame(animationId);
+            };
+        }, []);
+        return <canvas ref={canvasRef} className="absolute inset-0 z-[1] pointer-events-none will-change-transform" />;
+    });
+
+    const ModalContainer = ({ isOpen, onClose, title, children }) => {
+        if (!isOpen) return null;
+        return (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={onClose}></div>
+                <div className="parchment-texture relative w-full max-w-lg p-8 rounded shadow-[0_30px_60px_rgba(0,0,0,1)] animate-fade-in-up">
+                    <div className="absolute top-4 right-4 cursor-pointer text-amber-900 hover:text-red-800" onClick={onClose}>
+                        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </div>
+                    <h2 className="font-cinzel text-3xl text-amber-950 text-center mb-8 border-b-[3px] border-amber-900/30 pb-4 font-bold">{title}</h2>
+                    {children}
+                </div>
+            </div>
+        );
+    };
+
+    const WelcomeModal = ({ isOpen, onClose }) => {
+        if (!isOpen) return null;
+        return (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+                <div className="absolute inset-0 bg-black/90 backdrop-blur-md" onClick={onClose}></div>
+                <div className="relative w-full max-w-2xl parchment-texture p-2 rounded-lg shadow-[0_0_80px_rgba(212,175,55,0.4)] animate-fade-in-up border-4 border-[#8b6508]">
+                    <div className="absolute top-4 right-4 cursor-pointer text-white hover:text-yellow-400 z-10 bg-black/50 p-1 rounded-full backdrop-blur-sm transition-colors" onClick={onClose}>
+                        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </div>
+                    <img src="https://images.unsplash.com/photo-1599727653609-b7b51e5926b4?auto=format&fit=crop&q=80&w=800" alt="Welcome Knight" className="w-full h-64 sm:h-80 object-cover rounded border-2 border-amber-900/50 filter sepia-[0.3] contrast-125" />
+                    <div className="p-8 text-center bg-[url('https://www.transparenttextures.com/patterns/aged-paper.png')]">
+                        <h2 className="font-medieval text-4xl sm:text-5xl text-amber-950 font-black mb-4 drop-shadow-sm">You are welcome in Krusader</h2>
+                        <p className="font-cinzel text-lg sm:text-xl text-amber-900 font-bold tracking-widest uppercase mb-8">Your oath is accepted. The crusade awaits!</p>
+                        <button onClick={onClose} className="noble-button px-10 py-4 font-cinzel font-bold text-xl rounded shadow-xl uppercase tracking-widest w-full sm:w-auto">
+                            Enter the Realm
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    const CornerDecoration = () => (
+        <div className="absolute inset-0 pointer-events-none opacity-60 z-0">
+            <div className="absolute top-0 left-0 w-40 h-40 border-l-[12px] border-t-[12px] border-amber-900/40 m-4 shadow-[inset_10px_10px_20px_rgba(0,0,0,0.8)]"></div>
+            <div className="absolute top-0 right-0 w-40 h-40 border-r-[12px] border-t-[12px] border-amber-900/40 m-4 shadow-[inset_-10px_10px_20px_rgba(0,0,0,0.8)]"></div>
+            <div className="absolute bottom-0 left-0 w-40 h-40 border-l-[12px] border-b-[12px] border-amber-900/40 m-4 shadow-[inset_10px_-10px_20px_rgba(0,0,0,0.8)]"></div>
+            <div className="absolute bottom-0 right-0 w-40 h-40 border-r-[12px] border-b-[12px] border-amber-900/40 m-4 shadow-[inset_-10px_-10px_20px_rgba(0,0,0,0.8)]"></div>
+        </div>
+    );
+
+    const ModeCard = ({ title, desc, label, icon, onClick, isCentral, bgUrl, delayClass }) => (
+        <button onClick={onClick} className={`relative cursor-pointer transition-all duration-500 group animate-fade-in-up flex flex-col focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-yellow-500 rounded ${delayClass} ${isCentral ? 'z-20 scale-100 md:scale-105 mt-0 md:-mt-6 mb-0 md:mb-6' : 'scale-95 opacity-90 hover:opacity-100'} w-full`}>
+            <div className={`parchment-texture overflow-hidden min-h-[280px] sm:min-h-[350px] md:min-h-[450px] w-full flex flex-col flex-1 transition-all duration-300 border-[4px] sm:border-[6px] border-[#3a2b0c] ${isCentral ? 'shadow-[0_30px_60px_rgba(0,0,0,0.9)]' : 'shadow-[0_15px_30px_rgba(0,0,0,0.8)] group-hover:shadow-[0_20px_40px_rgba(0,0,0,0.9)]'}`}>
+                <div className="h-1/2 relative overflow-hidden flex-shrink-0 border-b-4 border-[#3a2b0c]">
+                    <img src={bgUrl} className="w-full h-full object-cover transition-all duration-1000 group-hover:scale-110 group-hover:rotate-1 filter brightness-75 sepia-[0.4] contrast-125 will-change-transform" alt={title} />
+                    <div className="absolute inset-0 bg-gradient-to-t from-[var(--parchment)] via-transparent to-black/60 mix-blend-multiply"></div>
+                    <div className="absolute inset-0 shadow-[inset_0_0_30px_rgba(0,0,0,0.9)] pointer-events-none"></div>
+                    <div className="absolute top-3 sm:top-4 left-3 sm:left-4">
+                        <span className="bg-amber-950 text-yellow-500 text-[9px] sm:text-[10px] font-bold tracking-[0.25em] px-2 sm:px-3 py-1 border-2 border-yellow-700/80 uppercase shadow-lg">{label}</span>
+                    </div>
+                </div>
+                <div className="p-4 sm:p-6 flex-1 flex flex-col items-center justify-center text-center relative bg-[url('https://www.transparenttextures.com/patterns/aged-paper.png')]">
+                    <div className="w-12 h-12 sm:w-16 sm:h-16 mb-2 sm:mb-4 text-amber-950 animate-float group-hover:text-red-900 transition-colors drop-shadow-md">{icon}</div>
+                    <h3 className="font-medieval text-xl sm:text-2xl md:text-3xl text-amber-950 mb-2 sm:mb-3 leading-tight drop-shadow-sm font-black">{title}</h3>
+                    <p className="font-serif italic text-amber-900/80 leading-relaxed text-xs sm:text-sm md:text-base px-1 sm:px-2 font-bold">"{desc}"</p>
+                </div>
+            </div>
+        </button>
+    );
+
+    const PlayerShield = ({ name, isReady, avatar, color, isSelf, t, onClick, onEdit }) => (
+        <div className="flex flex-col items-center gap-2 sm:gap-4 group animate-fade-in-up relative">
+            {isSelf && onEdit && (
+                <button
+                    onClick={(e) => { e.stopPropagation(); onEdit(); }}
+                    className="absolute z-40 -top-2 -left-2 bg-[#2a1b04] border-2 border-yellow-600 text-yellow-400 rounded-full p-1.5 hover:bg-yellow-700 hover:text-white hover:scale-110 transition-all shadow-[0_0_10px_rgba(212,175,55,0.5)]"
+                    title="Change Appearance"
+                >
+                    <div className="w-4 h-4"><Icons.User /></div>
+                </button>
+            )}
+            <button onClick={isSelf ? onClick : null} tabIndex={isSelf ? 0 : -1} className={`shield-container w-20 h-20 sm:w-28 sm:h-28 md:w-36 md:h-36 transition-transform duration-300 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-yellow-400 rounded-full ${isSelf ? 'cursor-pointer hover:scale-105 active:scale-95' : 'group-hover:scale-105 group-hover:-translate-y-2 cursor-default'}`}>
+                {isReady && <div className="absolute inset-0 bg-green-500/40 blur-2xl rounded-full animate-pulse"></div>}
+                <div className={`shield-border w-full h-full transition-all duration-500 shadow-[inset_0_0_10px_rgba(0,0,0,0.8)]`} style={{ background: isReady ? 'linear-gradient(135deg,#4ade80 0%,#14532d 100%)' : 'linear-gradient(135deg, #e6c27a 0%, #8b6508 40%, #2a1b04 100%)' }}>
+                    <div className="shield-inner relative overflow-hidden" style={{ background: `linear-gradient(135deg, ${color || '#2c3e50'} 0%, #0a0a0a 100%)` }}>
+                        <img src={avatar} alt={name} className="w-full h-full object-cover relative z-10 drop-shadow-[0_10px_10px_rgba(0,0,0,1)] scale-[1.15] translate-y-1" />
+                        <div className="absolute inset-0 bg-gradient-to-br from-white/20 via-transparent to-black/80 z-20 pointer-events-none mix-blend-overlay"></div>
+                        <div className="absolute top-0 left-0 right-0 h-1/2 bg-gradient-to-b from-white/30 to-transparent z-20 pointer-events-none rounded-t-full opacity-50"></div>
+                        <div className="absolute inset-[4px] border-2 border-white/20 clip-shield pointer-events-none z-20 mix-blend-overlay"></div>
+                    </div>
+                </div>
+                {isReady && (
+                    <div className="absolute -top-3 -right-3 bg-gradient-to-br from-green-500 to-green-800 text-white p-2 rounded-full shadow-[0_5px_15px_rgba(0,0,0,0.8)] border-2 border-green-300 z-30">
+                        <svg className="w-6 h-6 drop-shadow-md" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M5 13l4 4L19 7" /></svg>
+                    </div>
+                )}
+                {isSelf && (
+                    <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 bg-gradient-to-b from-yellow-500 to-yellow-700 text-amber-950 text-[11px] font-bold px-4 py-1.5 rounded shadow-[0_5px_15px_rgba(0,0,0,0.9)] border-2 border-yellow-200 uppercase tracking-wider z-30 whitespace-nowrap">
+                        {t.lobby.you}
+                    </div>
+                )}
+            </button>
+            <div className="text-center mt-3 wood-panel px-4 py-2 rounded border-2 border-yellow-900/50 w-full relative">
+                <p className="font-medieval text-yellow-100 text-xl drop-shadow-[0_2px_2px_rgba(0,0,0,1)] truncate">{name}</p>
+                <p className={`text-[10px] font-bold uppercase tracking-widest mt-1 ${isReady ? 'text-green-400 drop-shadow-[0_0_5px_rgba(34,197,94,0.6)]' : 'text-amber-500/50'}`}>
+                    {isReady ? t.lobby.ready : '...'}
+                </p>
+            </div>
+        </div>
+    );
+
+    // --- SCREENS ---
+    const AuthScreen = () => {
+        const { lang, setLang, t, playSound } = useGame();
+        const [view, setView] = useState('login');
+        const [email, setEmail] = useState('');
+        const [pass, setPass] = useState('');
+        const [name, setName] = useState('');
+        const [loading, setLoading] = useState(false);
+
+        const handleAuth = async (action) => {
+            playSound('click'); setLoading(true);
+            try {
+                if (action === 'guest') {
+                    const { error } = await supabase.auth.signInAnonymously();
+                    if (error) throw error; ToastManager.show("Entering in shadows...");
+                } else if (action === 'google') {
+                    const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+                    if (error) throw error;
+                } else if (action === 'login') {
+                    if(!email || !pass) throw new Error("Credentials required!");
+                    const { error } = await supabase.auth.signInWithPassword({ email, password: pass });
+                    if (error) throw error; ToastManager.show("Welcome back, hero.");
+                } else if (action === 'register') {
+                    if(!email || !pass || !name) throw new Error("All fields required!");
+                    const { data, error } = await supabase.auth.signUp({ email, password: pass, options: { data: { display_name: name } } });
+                    if (error) throw error; ToastManager.show("Account forged in fire!");
+                }
+            } catch (e) { ToastManager.show(e.message || "An error occurred."); } finally { setLoading(false); }
+        };
+
+        return (
+            <div className="w-full h-full flex flex-col items-center justify-center relative auth-bg text-white font-cinzel">
+                <div className="absolute top-6 right-6 z-20">
+                    <button onClick={() => { playSound('click'); setLang(l => l === 'bg' ? 'en' : 'bg') }} className="px-4 py-1.5 border border-[#8f6e30] bg-black/60 text-[#ecd08c] font-bold hover:bg-[#8f6e30]/40 transition-all text-[11px] tracking-[0.2em] rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ecd08c] shadow-[0_5px_10px_rgba(0,0,0,0.8)]">
+                        {lang.toUpperCase()}
+                    </button>
+                </div>
+                <div className="w-[420px] max-w-[95%] sm:max-w-[90%] relative z-10 perspective-[1000px] animate-fade-in-up">
+                    <div className="auth-card p-6 sm:p-10 transition-all duration-300">
+                        <div className="auth-corner auth-tl"></div><div className="auth-corner auth-tr"></div>
+                        <div className="auth-corner auth-bl"></div><div className="auth-corner auth-br"></div>
+                        <Icons.AuthLogo className="w-[60px] h-[60px] mx-auto mb-4 block fill-[#ecd08c] drop-shadow-[0_5px_10px_rgba(0,0,0,0.8)]" />
+                        <h2 className="text-center m-0 mb-8 font-cinzel-dec text-3xl text-white auth-h2 pb-3 relative tracking-wider">{view === 'login' ? t.auth.login : t.auth.register}</h2>
+                        {view === 'register' && (
+                            <div className="relative mb-5 auth-input-group mt-2">
+                                <input type="text" id="auth-name" placeholder=" " className="auth-input peer" value={name} onChange={e => setName(e.target.value)} />
+                                <label htmlFor="auth-name" className="absolute left-[36px] top-[14px] text-white/50 transition-all duration-300 peer-focus:-top-[10px] peer-focus:left-[10px] peer-focus:text-[11px] peer-focus:text-[#ecd08c] peer-focus:bg-[#1a150e] peer-focus:px-2 peer-[:not(:placeholder-shown)]:-top-[10px] peer-[:not(:placeholder-shown)]:left-[10px] peer-[:not(:placeholder-shown)]:text-[11px] peer-[:not(:placeholder-shown)]:text-[#ecd08c] peer-[:not(:placeholder-shown)]:bg-[#1a150e] peer-[:not(:placeholder-shown)]:px-2 pointer-events-none rounded tracking-wider">{t.auth.name}</label>
+                                <div className="absolute left-[12px] top-1/2 -translate-y-1/2 w-[18px] h-[18px] pointer-events-none"><Icons.User className="w-full h-full fill-current" /></div>
+                            </div>
+                        )}
+                        <div className="relative mb-5 auth-input-group mt-2">
+                            <input type="email" id="auth-email" placeholder=" " className="auth-input peer" value={email} onChange={e => setEmail(e.target.value)} />
+                            <label htmlFor="auth-email" className="absolute left-[36px] top-[14px] text-white/50 transition-all duration-300 peer-focus:-top-[10px] peer-focus:left-[10px] peer-focus:text-[11px] peer-focus:text-[#ecd08c] peer-focus:bg-[#1a150e] peer-focus:px-2 peer-[:not(:placeholder-shown)]:-top-[10px] peer-[:not(:placeholder-shown)]:left-[10px] peer-[:not(:placeholder-shown)]:text-[11px] peer-[:not(:placeholder-shown)]:text-[#ecd08c] peer-[:not(:placeholder-shown)]:bg-[#1a150e] peer-[:not(:placeholder-shown)]:px-2 pointer-events-none rounded tracking-wider">{t.auth.email}</label>
+                            <div className="absolute left-[12px] top-1/2 -translate-y-1/2 w-[18px] h-[18px] pointer-events-none"><Icons.Email className="w-full h-full fill-current" /></div>
+                        </div>
+                        <div className="relative mb-5 auth-input-group mt-2">
+                            <input type="password" id="auth-pass" placeholder=" " className="auth-input peer" value={pass} onChange={e => setPass(e.target.value)} />
+                            <label htmlFor="auth-pass" className="absolute left-[36px] top-[14px] text-white/50 transition-all duration-300 peer-focus:-top-[10px] peer-focus:left-[10px] peer-focus:text-[11px] peer-focus:text-[#ecd08c] peer-focus:bg-[#1a150e] peer-focus:px-2 peer-[:not(:placeholder-shown)]:-top-[10px] peer-[:not(:placeholder-shown)]:left-[10px] peer-[:not(:placeholder-shown)]:text-[11px] peer-[:not(:placeholder-shown)]:text-[#ecd08c] peer-[:not(:placeholder-shown)]:bg-[#1a150e] peer-[:not(:placeholder-shown)]:px-2 pointer-events-none rounded tracking-wider">{t.auth.pass}</label>
+                            <div className="absolute left-[12px] top-1/2 -translate-y-1/2 w-[18px] h-[18px] pointer-events-none"><Icons.Lock className="w-full h-full fill-current" /></div>
+                        </div>
+                        <button onClick={() => handleAuth(view)} disabled={loading} className="w-full p-4 mt-2 auth-btn auth-btn-primary text-white font-bold tracking-[2px] uppercase rounded">{loading ? "..." : (view === 'login' ? t.auth.enter : t.auth.forge)}</button>
+                        <div className="flex items-center text-center text-[#ecd08c] my-6 text-xs font-bold opacity-60 auth-divider"><span className="px-3 drop-shadow-md">{t.auth.or}</span></div>
+                        <button onClick={() => handleAuth('google')} disabled={loading} className="w-full p-4 mt-2 auth-btn bg-black/40 border border-[#ecd08c]/40 text-white/90 font-bold tracking-[1.5px] uppercase rounded"><span className="inline-block align-middle mr-2">⚔</span> {t.auth.google}</button>
+                        <button onClick={() => handleAuth('guest')} disabled={loading} className="w-full p-4 mt-3 auth-btn bg-black/40 border border-[#ecd08c]/40 text-white/90 font-bold tracking-[1.5px] uppercase rounded">{t.auth.guest}</button>
+                        <div className="text-center mt-8 text-[15px] text-white/80 bg-black/50 p-3 rounded-b-lg -mx-8 -mb-8 border-t border-yellow-900/50">
+                            {view === 'login' ? t.auth.notSworn : t.auth.sworn}
+                            <button onClick={() => { playSound('click'); setView(view === 'login' ? 'register' : 'login') }} className="auth-link font-bold ml-1 focus-visible:outline-none focus-visible:text-white text-[#ecd08c]">
+                                {view === 'login' ? t.auth.takeOath : t.auth.openGate}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    const GameMenu = ({ onCreateRoom, onJoinRoom }) => {
+        const { t, playSound } = useGame();
+        const [joinCode, setJoinCode] = useState('');
+        const [isCodexOpen, setIsCodexOpen] = useState(false);
+
+        return (
+            <div className="h-full flex flex-col items-center max-w-[1200px] mx-auto pb-10">
+                <div className="mb-8 sm:mb-12 w-full max-w-3xl mx-auto forged-iron py-6 sm:py-8 px-4 sm:px-10 relative flex flex-col sm:flex-row items-center justify-between gap-4 sm:gap-6 group animate-fade-in-up rounded">
+                    <div className="flex flex-col text-center sm:text-left">
+                        <h4 className="font-cinzel text-lg sm:text-xl text-yellow-500 font-bold tracking-widest uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,1)] mb-1">{t.lobby.joinPrompt}</h4>
+                    </div>
+                    <div className="flex items-stretch w-full sm:w-auto relative group-focus-within:shadow-[0_0_20px_rgba(212,175,55,0.4)] transition-shadow rounded z-10">
+                        <div className="relative flex-1 sm:w-48">
+                            <input type="text" value={joinCode} onChange={e => setJoinCode(e.target.value)} placeholder=" " id="join-code" className="peer w-full h-full bg-[#0a0a0a] border-2 border-yellow-800/80 border-r-0 text-yellow-100 px-3 sm:px-4 pt-4 pb-2 font-mono text-lg sm:text-xl uppercase tracking-widest outline-none focus-visible:border-yellow-400 rounded-l transition-all text-center placeholder-transparent shadow-[inset_0_5px_15px_rgba(0,0,0,1)]" maxLength={6} />
+                            <label htmlFor="join-code" className="absolute left-1/2 -translate-x-1/2 top-4 text-amber-700/50 pointer-events-none transition-all duration-300 peer-focus:top-1 peer-focus:text-[10px] peer-focus:text-yellow-500 peer-[:not(:placeholder-shown)]:top-1 peer-[:not(:placeholder-shown)]:text-[10px] peer-[:not(:placeholder-shown)]:text-yellow-500 font-cinzel tracking-widest uppercase font-bold">{t.lobby.joinPlaceholder}</label>
+                        </div>
+                        <button onClick={() => { playSound('click'); onJoinRoom(joinCode); }} className="noble-button rounded-l-none rounded-r px-4 sm:px-8 font-cinzel font-bold text-base sm:text-lg border-l-0 whitespace-nowrap">{t.lobby.joinBtn}</button>
+                    </div>
+                </div>
+                <div className="w-full max-w-4xl mb-8 sm:mb-12 animate-fade-in-up delay-100 text-center">
+                    <div className="parchment-texture p-6 sm:p-12 relative rounded shadow-[0_15px_30px_rgba(0,0,0,0.8)]">
+                        <h3 className="font-cinzel text-amber-950 text-2xl sm:text-3xl font-black mb-6 sm:mb-8 tracking-[0.2em] sm:tracking-[0.3em] drop-shadow-sm border-b-2 border-amber-900/30 pb-4 inline-block">{t.resumeTitle}</h3>
+                        <div className="space-y-4 sm:space-y-6 px-1 sm:px-8 text-center">
+                            <p className="font-serif text-amber-950/90 leading-relaxed italic text-base sm:text-xl font-medium">{t.resumeP1}</p>
+                            <p className="font-serif text-amber-950/80 leading-relaxed italic text-sm sm:text-lg">{t.resumeP2}</p>
+                        </div>
+                    </div>
+                </div>
+                <div className="mb-8 sm:mb-10 text-center animate-fade-in-up delay-200 flex items-center justify-center gap-2 sm:gap-4">
+                    <div className="inline-flex items-center gap-3 sm:gap-6 justify-center wood-panel px-4 sm:px-10 py-3 sm:py-4 rounded border border-yellow-900/50">
+                        <div className="w-3 h-3 sm:w-4 sm:h-4 rotate-45 border-2 border-yellow-600 bg-yellow-900 shadow-[0_0_10px_rgba(0,0,0,1)]"></div>
+                        <h2 className="font-cinzel text-lg sm:text-2xl text-yellow-500 font-bold tracking-[0.2em] sm:tracking-[0.4em] uppercase drop-shadow-[0_4px_4px_rgba(0,0,0,1)]">{t.selectMode}</h2>
+                        <div className="w-3 h-3 sm:w-4 sm:h-4 rotate-45 border-2 border-yellow-600 bg-yellow-900 shadow-[0_0_10px_rgba(0,0,0,1)]"></div>
+                    </div>
+                    <button onClick={() => { playSound('click'); setIsCodexOpen(true); }} className="w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-br from-amber-900 to-[#2a1610] border-2 border-yellow-700 rounded-full flex items-center justify-center text-yellow-400 hover:text-yellow-200 hover:scale-105 active:scale-95 transition-all shadow-[0_10px_20px_rgba(0,0,0,0.9)]"><div className="w-5 h-5 sm:w-6 sm:h-6 drop-shadow-md"><Icons.Book /></div></button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8 lg:gap-12 w-full px-4 sm:px-0">
+                    <ModeCard title={t.modes.fiveMin.title} desc={t.modes.fiveMin.desc} label={t.modes.fiveMin.label} icon={<Icons.Clock />} bgUrl="https://images.unsplash.com/photo-1511914265872-c40672604a80?auto=format&fit=crop&q=80&w=600" onClick={() => onCreateRoom(t.modes.fiveMin.id)} delayClass="delay-300"/>
+                    <ModeCard title={t.modes.lastStanding.title} desc={t.modes.lastStanding.desc} label={t.modes.lastStanding.label} icon={<Icons.Trophy />} isCentral={true} bgUrl="https://images.unsplash.com/photo-1447069387593-a5de0862481e?auto=format&fit=crop&q=80&w=600" onClick={() => onCreateRoom(t.modes.lastStanding.id)} delayClass="delay-[400ms]"/>
+                    <ModeCard title={t.modes.teams.title} desc={t.modes.teams.desc} label={t.modes.teams.label} icon={<Icons.Users />} bgUrl="https://images.unsplash.com/photo-1533154683836-84ea7a0bc310?auto=format&fit=crop&q=80&w=600" onClick={() => onCreateRoom(t.modes.teams.id)} delayClass="delay-[500ms]"/>
+                </div>
+                <ModalContainer isOpen={isCodexOpen} onClose={() => { playSound('click'); setIsCodexOpen(false); }} title={t.codex.title}>
+                    <div className="space-y-6 font-serif text-amber-950/90 mb-8">
+                        <div className="p-4 bg-amber-900/10 border border-amber-900/30 rounded"><strong className="font-cinzel text-xl text-amber-950 block mb-1">{t.modes.fiveMin.title}</strong> {t.codex.rule1}</div>
+                        <div className="p-4 bg-amber-900/10 border border-amber-900/30 rounded"><strong className="font-cinzel text-xl text-amber-950 block mb-1">{t.modes.lastStanding.title}</strong> {t.codex.rule2}</div>
+                        <div className="p-4 bg-amber-900/10 border border-amber-900/30 rounded"><strong className="font-cinzel text-xl text-amber-950 block mb-1">{t.modes.teams.title}</strong> {t.codex.rule3}</div>
+                    </div>
+                    <button onClick={() => { playSound('click'); setIsCodexOpen(false); }} className="w-full py-4 border-[3px] border-amber-900 bg-transparent text-amber-950 font-black tracking-widest hover:bg-amber-900 hover:text-yellow-100 transition-colors uppercase font-cinzel rounded">{t.codex.close}</button>
+                </ModalContainer>
+            </div>
+        );
+    };
+
+    const LobbyRoom = ({ roomCode, onLeave, onOpenArmory }) => {
+        const { t, user, profile, playSound } = useGame();
+        const [roomData, setRoomData] = useState(null);
+        const [topic, setTopic] = useState('');
+        const [isGenerating, setIsGenerating] = useState(false);
+        const [chatMsg, setChatMsg] = useState("");
+        const chatEndRef = useRef(null);
+        const gameLaunched = useRef(false);
+
+        // Fetch Initial Data & Subscribe to Changes
+        useEffect(() => {
+            if(!roomCode) return;
+            const fetchInitial = async () => {
+                const { data } = await supabase.from('game_lobbies').select('room_data').eq('room_code', roomCode).single();
+                if (data) setRoomData(data.room_data);
+                else { ToastManager.show("Room was disbanded."); onLeave(); }
+            };
+            fetchInitial();
+
+            const channel = supabase.channel(`room_${roomCode}`)
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'game_lobbies', filter: `room_code=eq.${roomCode}` }, (payload) => {
+                    if (payload.eventType === 'DELETE') { ToastManager.show("Room was disbanded."); onLeave(); }
+                    else {
+                        setRoomData(payload.new.room_data);
+                        setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+                    }
+                }).subscribe();
+            return () => { supabase.removeChannel(channel); };
+        }, [roomCode]);
+
+        // Monitor for game launch
+        useEffect(() => {
+            if (roomData && roomData.status === 'playing' && !gameLaunched.current) {
+                gameLaunched.current = true;
+                const isHost = roomData.players.length > 0 && roomData.players[0].uid === user.id;
+                window.launchKrusaderGame(roomData, isHost, {
+                    id: user.id, name: profile.name, color: profile.color, avatar: profile.avatar
+                }, roomCode);
+            }
+        }, [roomData?.status]);
+
+        const updateRoomData = async (newData) => { await supabase.from('game_lobbies').update({ room_data: newData }).eq('room_code', roomCode); };
+        const handleToggleReady = async () => { if (!roomData) return; playSound('sword'); const updated = roomData.players.map(p => p.uid === user.id ? { ...p, isReady: !p.isReady } : p); await updateRoomData({ ...roomData, players: updated }); };
+        const handleLeave = async () => { playSound('click'); if (roomData) { const updated = roomData.players.filter(p => p.uid !== user.id); if (updated.length === 0) await supabase.from('game_lobbies').delete().eq('room_code', roomCode); else await updateRoomData({ ...roomData, players: updated }); } onLeave(); };
+
+        const handleStartCrusade = async () => {
+            playSound('click');
+            await updateRoomData({ ...roomData, status: 'playing' });
+        };
+
+        const handleGenerateQuiz = async () => {
+            if (!topic.trim()) return ToastManager.show("Enter a topic first!");
+            playSound('click'); setIsGenerating(true);
+            try {
+                const apiKey = ""; // Add your actual api key here if active
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                const payload = { contents: [{ parts: [{ text: `Create 5 challenging multiple-choice trivia questions about: ${topic}. Format to fit a medieval/crusade theme if possible.` }] }], generationConfig: { responseMimeType: "application/json", responseSchema: { type: "ARRAY", items: { type: "OBJECT", properties: { question: { type: "STRING" }, options: { type: "ARRAY", items: { type: "STRING" } }, correctAnswer: { type: "STRING" } }, required: ["question", "options", "correctAnswer"] } } } };
+                let questions = null; const delays = [1000, 2000, 4000];
+                for (let i = 0; i < delays.length; i++) {
+                    try {
+                        const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+                        if (!res.ok) throw new Error();
+                        const data = await res.json();
+                        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                        if (text) { questions = JSON.parse(text); break; }
+                    } catch (e) { if (i === delays.length - 1) throw e; await new Promise(r => setTimeout(r, delays[i])); }
+                }
+                if (questions) { await updateRoomData({ ...roomData, questions, topic }); ToastManager.show("Divine Scroll Forged!"); }
+                else throw new Error("Failed");
+            } catch (e) { ToastManager.show("The oracle failed. You will use default ancient scrolls."); await updateRoomData({ ...roomData, questions: [], topic: 'Default Scrolls' }); }
+            finally { setIsGenerating(false); }
+        };
+
+        const handleSendChat = async (e) => { e.preventDefault(); if (!chatMsg.trim()) return; const newMsg = { uid: user.id, name: profile.name, text: chatMsg, time: Date.now() }; await updateRoomData({ ...roomData, messages: [...(roomData.messages || []), newMsg] }); setChatMsg(""); };
+
+        if (!roomData) return <div className="h-full flex items-center justify-center text-yellow-600 font-cinzel animate-pulse text-3xl font-black drop-shadow-[0_0_20px_rgba(212,175,55,0.8)]">Summoning Chamber...</div>;
+
+        const modeConfig = t.modes[roomData.mode] || t.modes.lastStanding;
+        const allReady = roomData.players.every(p => p.isReady) && roomData.players.length >= 1 && roomData.questions;
+        const isHost = roomData.players.length > 0 && roomData.players[0].uid === user.id;
+        const messages = roomData.messages || [];
+
+        return (
+            <div className="h-full flex flex-col lg:flex-row gap-8 max-w-7xl mx-auto pt-4 pb-10">
+                <div className="flex-1 flex flex-col items-center min-w-0">
+                    <div className="w-full forged-iron rounded-xl mb-12 relative overflow-visible flex flex-col lg:flex-row items-center justify-between p-6 gap-6 animate-fade-in-up">
+                        <div className="absolute top-0 left-4 right-4 h-[2px] bg-gradient-to-r from-transparent via-yellow-500 to-transparent opacity-30"></div>
+                        <div className="flex items-center gap-6 z-10 w-full lg:w-auto">
+                            <div className="relative">
+                                <div className="absolute inset-0 bg-yellow-600/30 blur-2xl rounded-full"></div>
+                                <div className="w-20 h-20 p-4 bg-gradient-to-br from-[#2a1b04] to-black border-[3px] border-yellow-600 rounded shadow-[inset_0_0_20px_rgba(0,0,0,1),_0_10px_30px_rgba(0,0,0,0.9)] text-yellow-400 relative z-10 flex items-center justify-center transform -rotate-3">
+                                    {roomData.mode === 'fiveMin' && <Icons.Clock />}{roomData.mode === 'lastStanding' && <Icons.Trophy />}{roomData.mode === 'teams' && <Icons.Users />}
+                                </div>
+                            </div>
+                            <div className="flex-1 text-center lg:text-left">
+                                <h3 className="font-medieval text-3xl sm:text-4xl text-yellow-400 uppercase tracking-widest leading-tight drop-shadow-[0_2px_4px_rgba(0,0,0,1)] mb-1">{modeConfig.title}</h3>
+                                <div className="flex items-center gap-3 justify-center lg:justify-start">
+                                    <div className="w-2.5 h-2.5 rounded-full bg-yellow-500 animate-pulse shadow-[0_0_10px_#facc15]"></div>
+                                    <p className="font-cinzel text-amber-400/80 text-sm tracking-widest uppercase font-bold">{t.lobby.waiting}</p>
+                                </div>
+                            </div>
+                        </div>
+                        <button className="relative z-10 wood-panel px-6 py-4 rounded-lg text-center group hover:brightness-110 transition-all" onClick={() => { navigator.clipboard.writeText(roomCode); ToastManager.show("Code Copied!"); }}>
+                            <p className="text-[10px] text-amber-500 font-bold tracking-[0.4em] mb-2 uppercase drop-shadow-md">{t.lobby.roomCode}</p>
+                            <div className="bg-[#0a0a0a] border-2 border-[#1a1a1a] px-5 py-2 rounded text-3xl font-mono text-yellow-500 tracking-[0.3em] shadow-[inset_0_5px_15px_rgba(0,0,0,1)]">{roomCode}</div>
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-10 mb-8 sm:mb-12 w-full justify-items-center">
+                        {roomData.players.map((p) => <PlayerShield key={p.uid} name={p.name} isReady={p.isReady} avatar={p.avatar} color={p.color} isSelf={p.uid === user.id} t={t} onClick={handleToggleReady} onEdit={onOpenArmory} />)}
+                        {Array.from({ length: Math.max(0, 4 - roomData.players.length) }).map((_, i) => (
+                            <div key={`empty-${i}`} className="flex flex-col items-center gap-2 sm:gap-4 group animate-fade-in-up delay-300">
+                                <div className="shield-container w-20 h-20 sm:w-28 sm:h-28 md:w-36 md:h-36">
+                                    <div className="shield-border w-full h-full bg-[#111] border-2 border-dashed border-[#333] relative overflow-hidden shadow-[inset_0_0_20px_rgba(0,0,0,1)]">
+                                        <div className="shield-inner bg-transparent flex items-center justify-center relative z-10 opacity-50"><div className="w-8 h-8 sm:w-12 sm:h-12 text-[#444]"><Icons.Shield /></div></div>
+                                    </div>
+                                </div>
+                                <div className="text-center mt-3 wood-panel px-4 py-2 rounded border-2 border-transparent w-full">
+                                    <p className="font-cinzel text-[9px] sm:text-[11px] font-bold text-amber-700 uppercase tracking-widest mt-1">{t.lobby.invite}</p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="w-full forged-iron p-6 sm:p-8 rounded-xl flex flex-col items-center animate-fade-in-up delay-300 mb-8 sm:mb-10">
+                        <h4 className="font-cinzel text-yellow-500 text-lg sm:text-xl font-bold tracking-widest uppercase mb-4 sm:mb-6 flex items-center gap-2 drop-shadow-md text-center"><Icons.Sparkles className="w-5 h-5 text-yellow-400" />{t.lobby.divineScroll}<Icons.Sparkles className="w-5 h-5 text-yellow-400" /></h4>
+                        {roomData.questions ? (
+                            <div className="flex flex-col items-center gap-4">
+                                <div className="text-green-400 font-medieval text-xl tracking-wider drop-shadow-md bg-black/40 px-6 py-2 rounded-lg border border-green-900/50">{roomData.questions.length > 0 ? `${roomData.questions.length} ${t.lobby.questionsForged}` : `Using Default Scrolls`}</div>
+                                <div className="text-amber-500 font-cinzel text-xs uppercase tracking-widest border-2 border-amber-900 bg-[#111] px-6 py-2 rounded">Topic: {roomData.topic}</div>
+                            </div>
+                        ) : isHost ? (
+                            <div className="flex flex-col sm:flex-row gap-4 w-full justify-center">
+                                <input type="text" value={topic} onChange={e => setTopic(e.target.value)} placeholder={t.lobby.topicPlaceholder} className="w-full sm:w-2/3 bg-[#0a0a0a] border-2 border-[#333] text-yellow-100 px-6 py-4 font-cinzel text-sm sm:text-lg uppercase tracking-widest outline-none focus-visible:border-yellow-500 rounded text-center" />
+                                <button onClick={handleGenerateQuiz} disabled={isGenerating} className="noble-button w-full sm:w-auto px-10 py-4 font-cinzel font-bold text-sm sm:text-lg rounded shadow-xl disabled:opacity-50">{isGenerating ? t.lobby.summoning : t.lobby.generate}</button>
+                            </div>
+                        ) : <div className="text-amber-600 font-cinzel text-sm sm:text-lg uppercase tracking-widest animate-pulse">{t.lobby.awaitingHost}</div>}
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 animate-fade-in-up delay-300 w-full justify-center">
+                        <button onClick={handleLeave} className="noble-button group px-10 py-5 rounded" style={{background: 'linear-gradient(to bottom, #5a1010, #2a0505)'}}><span className="font-cinzel text-lg tracking-widest text-red-100 font-bold">{t.lobby.leave}</span></button>
+                        <button disabled={!allReady} onClick={handleStartCrusade} className="noble-button group px-20 py-5 rounded overflow-hidden flex items-center justify-center transition-all duration-300">
+                            <span className={`font-medieval text-xl sm:text-3xl tracking-[0.2em] relative z-10 transition-colors flex items-center gap-4 ${allReady ? 'text-yellow-100' : 'text-[#666]'}`}>
+                                {!allReady && <Icons.Lock className="w-6 h-6 sm:w-8 sm:h-8 opacity-70" />}
+                                {allReady ? t.lobby.start : (!roomData.questions ? t.lobby.awaitingScroll : t.lobby.waitingOthers)}
+                            </span>
+                        </button>
+                    </div>
+                </div>
+
+                <div className="w-full lg:w-96 h-[350px] sm:h-[500px] lg:h-auto flex flex-col wood-panel rounded-xl shadow-[0_20px_40px_rgba(0,0,0,0.9)] overflow-hidden animate-fade-in-up z-10 mt-6 lg:mt-0">
+                    <div className="h-14 bg-gradient-to-b from-[#2a1610] to-[#1a0a05] border-b-2 border-[#0a0502] flex items-center justify-center shadow-md z-10"><h3 className="font-cinzel text-yellow-600 font-black tracking-[0.3em] uppercase">{t.tavern.title}</h3></div>
+                    <div className="flex-1 overflow-y-auto custom-scroll p-5 space-y-5 bg-[#111] bg-[url('https://www.transparenttextures.com/patterns/stardust.png')]">
+                        {messages.length === 0 && <div className="text-center text-amber-700/50 font-serif italic mt-12 text-lg">The tavern is quiet...</div>}
+                        {messages.map((msg, i) => { const isMe = msg.uid === user.id; return ( <div key={i} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-fade-in-up`}><span className="text-[11px] text-amber-600 font-cinzel mb-1.5 px-1 font-bold drop-shadow-md">{isMe ? t.lobby.you : msg.name}</span><div className={`px-4 py-3 text-base font-serif max-w-[85%] leading-relaxed ${isMe ? 'parchment-bubble' : 'iron-bubble'} break-words`}>{msg.text}</div></div> ) })}
+                        <div ref={chatEndRef} />
+                    </div>
+                    <form onSubmit={handleSendChat} className="h-16 bg-[#0a0a0a] border-t-2 border-[#222] flex z-10">
+                        <input type="text" value={chatMsg} onChange={e=>setChatMsg(e.target.value)} placeholder={t.tavern.placeholder} className="flex-1 bg-transparent px-5 text-yellow-100 font-serif text-lg outline-none placeholder-[#444]" />
+                        <button type="submit" disabled={!chatMsg.trim()} className="w-16 flex items-center justify-center text-yellow-600 hover:text-yellow-400 hover:bg-[#1a1a1a] transition-colors disabled:opacity-30 border-l-2 border-[#222]"><div className="w-6 h-6"><Icons.Send /></div></button>
+                    </form>
+                </div>
+            </div>
+        );
+    };
+
+    const ArmoryModal = ({ isOpen, onClose, roomCode }) => {
+        const { t, user, profile, setProfile, playSound } = useGame();
+        const defaultTraits = { skinColor: 'f2d3b1', hair: 'short01', hairColor: '000000', eyes: 'variant01', mouth: 'variant01' };
+        const [tempProfile, setTempProfile] = useState(profile);
+        const [tempTraits, setTempTraits] = useState(profile?.traits || defaultTraits);
+        const traitOptions = { skinColor: ['f2d3b1', 'edb98a', 'fd9841', 'fcece2', 'd08b5b', 'ae5d29', '713f1d', '3a1f0f'], hair: ['long01', 'long02', 'long03', 'long04', 'long05', 'short01', 'short02', 'short03', 'short04', 'short05'], hairColor: ['000000', '4a3123', 'a56b46', 'e8b878', 'b22222', 'e0e0e0', 'ffffff', '4287f5'], eyes: ['variant01', 'variant02', 'variant03', 'variant04', 'variant05', 'variant06', 'variant07', 'variant08', 'variant09'], mouth: ['variant01', 'variant02', 'variant03', 'variant04', 'variant05', 'variant06', 'variant07', 'variant08', 'variant09', 'variant10'] };
+        const colors = ['#8b0000', '#2c3e50', '#997a00', '#1a5928', '#4a0e4e', '#804000', '#000000', '#1f2937'];
+
+        useEffect(() => { if (isOpen && profile) { setTempProfile(profile); setTempTraits(profile.traits || defaultTraits); } }, [isOpen, profile]);
+        useEffect(() => { if (!tempProfile) return; const newAvatar = `https://api.dicebear.com/7.x/adventurer/svg?seed=${tempProfile.seed}&backgroundColor=transparent&skinColor=${tempTraits.skinColor}&hair=${tempTraits.hair}&hairColor=${tempTraits.hairColor}&eyes=${tempTraits.eyes}&mouth=${tempTraits.mouth}`; setTempProfile(p => ({ ...p, avatar: newAvatar, traits: tempTraits })); }, [tempTraits]);
+
+        const TraitSelector = ({ label, traitKey }) => {
+            const optionsArray = traitOptions[traitKey]; const currentIndex = optionsArray.indexOf(tempTraits[traitKey]) >= 0 ? optionsArray.indexOf(tempTraits[traitKey]) : 0;
+            const cycle = (dir) => { playSound('click'); let next = currentIndex + dir; if(next < 0) next = optionsArray.length - 1; if(next >= optionsArray.length) next = 0; setTempTraits(t => ({ ...t, [traitKey]: optionsArray[next] })); };
+            return ( <div className="flex items-center justify-between forged-iron px-4 py-3 rounded shadow-md"><span className="font-cinzel text-xs text-amber-500 font-bold tracking-widest uppercase">{label}</span><div className="flex items-center gap-3"><button onClick={() => cycle(-1)} className="text-amber-700 hover:text-amber-400 bg-[#111] p-1 border border-[#333]"><div className="w-4 h-4"><Icons.ChevronLeft/></div></button><span className="text-yellow-100 font-mono text-xs w-6 text-center">{currentIndex + 1}</span><button onClick={() => cycle(1)} className="text-amber-700 hover:text-amber-400 bg-[#111] p-1 border border-[#333]"><div className="w-4 h-4"><Icons.ChevronRight/></div></button></div></div> );
+        };
+
+        const saveProfile = async () => {
+            playSound('click'); setProfile(tempProfile); onClose(); ToastManager.show("Armory Updated!");
+            if (roomCode) {
+                const { data } = await supabase.from('game_lobbies').select('room_data').eq('room_code', roomCode).single();
+                if (data) { const updated = data.room_data.players.map(p => p.uid === user.id ? { ...p, name: tempProfile.name, avatar: tempProfile.avatar, color: tempProfile.color } : p); await supabase.from('game_lobbies').update({ room_data: { ...data.room_data, players: updated } }).eq('room_code', roomCode); }
+            }
+        };
+
+        if (!tempProfile) return null;
+        return (
+            <ModalContainer isOpen={isOpen} onClose={onClose} title={t.armory.title}>
+                <div className="space-y-8">
+                    <div><label className="block font-cinzel text-xs text-amber-800 mb-3 font-bold tracking-widest">{t.armory.name}</label><input type="text" value={tempProfile.name} onChange={e => setTempProfile(p => ({...p, name: e.target.value}))} className="w-full bg-[#0a0a0a] border-2 border-yellow-900/50 text-yellow-100 px-4 py-4 font-cinzel text-lg tracking-widest outline-none text-center" /></div>
+                    <div className="flex flex-col sm:flex-row gap-8 items-center">
+                        <div className="w-40 h-40 flex-shrink-0 rounded-full border-[6px] border-[#3a2b0c] overflow-hidden flex items-center justify-center relative" style={{ backgroundColor: tempProfile.color }}><div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent pointer-events-none z-0"></div><img src={tempProfile.avatar} className="w-full h-full scale-[1.25] translate-y-3 relative z-10" alt="avatar"/></div>
+                        <div className="flex-1 w-full space-y-3"><TraitSelector label={t.armory.skin} traitKey="skinColor" /><TraitSelector label={t.armory.hair} traitKey="hair" /><TraitSelector label={t.armory.hairColor} traitKey="hairColor" /><TraitSelector label={t.armory.eyes} traitKey="eyes" /><TraitSelector label={t.armory.mouth} traitKey="mouth" /></div>
+                    </div>
+                    <div className="pt-4 border-t border-amber-900/30">
+                        <label className="block font-cinzel text-xs text-amber-800 mb-4 font-bold tracking-widest text-center">{t.armory.color}</label>
+                        <div className="flex justify-center gap-4 flex-wrap">{colors.map(c => <button key={c} onClick={() => setTempProfile(p => ({...p, color: c}))} className={`w-12 h-12 rounded-full border-[3px] transition-all ${tempProfile.color === c ? 'border-yellow-400 scale-110' : 'border-[#222]'}`} style={{ backgroundColor: c }}></button>)}</div>
+                    </div>
+                    <button onClick={saveProfile} className="w-full noble-button py-4 text-yellow-100 font-cinzel font-bold text-lg tracking-widest mt-6 rounded uppercase">{t.armory.save}</button>
+                </div>
+            </ModalContainer>
+        );
+    };
+
+    const GameInterface = () => {
+        const { t, lang, setLang, profile, settings, setSettings, playSound, user } = useGame();
+        const [view, setView] = useState('menu');
+        const [roomCode, setRoomCode] = useState(null);
+        const [isTransitioning, setIsTransitioning] = useState(false);
+        const [isArmoryOpen, setIsArmoryOpen] = useState(false);
+        const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+        const dropdownRef = useRef(null);
+
+        useEffect(() => { const handleClick = (e) => { if(dropdownRef.current && !dropdownRef.current.contains(e.target)) setIsSettingsOpen(false); }; document.addEventListener('mousedown', handleClick); return () => document.removeEventListener('mousedown', handleClick); }, []);
+
+        const changeView = (v) => { playSound('click'); setIsTransitioning(true); setTimeout(() => { setView(v); window.scrollTo(0,0); setIsTransitioning(false); }, 500); };
+        const handleLogout = async () => { playSound('click'); await supabase.auth.signOut(); ToastManager.show("You have left the realm."); };
+
+        const handleCreateRoom = async (mode) => {
+            playSound('click'); const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+            const initialData = { mode, status: 'waiting', messages: [], players: [{ uid: user.id, name: profile.name, avatar: profile.avatar, color: profile.color, isReady: false }] };
+            const { error } = await supabase.from('game_lobbies').insert([{ room_code: code, room_data: initialData }]);
+            if(error) { ToastManager.show("Error forging chamber!"); return; }
+            setRoomCode(code); changeView('lobby');
+        };
+
+        const handleJoinRoom = async (code) => {
+            if(!code) return; playSound('click'); const c = code.toUpperCase();
+            const { data } = await supabase.from('game_lobbies').select('room_data').eq('room_code', c).single();
+            if(data) {
+                let roomData = data.room_data;
+                if(!roomData.players.find(p => p.uid === user.id)) {
+                    if(roomData.players.length >= 4) return ToastManager.show("Chamber is full!");
+                    roomData.players.push({ uid: user.id, name: profile.name, avatar: profile.avatar, color: profile.color, isReady: false });
+                    await supabase.from('game_lobbies').update({ room_data: roomData }).eq('room_code', c);
+                }
+                setRoomCode(c); changeView('lobby');
+            } else { ToastManager.show("Chamber not found!"); }
+        };
+
+        return (
+            <div className="w-full h-full flex flex-col items-center justify-center animate-fade-in-up">
+                <div className="bg-crusade"></div>
+                <div className={`fixed inset-0 z-[60] bg-black flex flex-col items-center justify-center transition-opacity duration-500 ${isTransitioning ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
+                    <div className="relative w-24 h-24 sm:w-32 sm:h-32 animate-[pulse_1s_ease-in-out_infinite] z-10 flex items-center justify-center mb-6">
+                        <div className="absolute inset-0 border-[4px] sm:border-[6px] border-dashed border-yellow-600/40 rounded-full animate-spin-slow"></div>
+                        <Icons.Swords className="w-12 h-12 sm:w-16 sm:h-16 text-yellow-500 drop-shadow-[0_0_20px_rgba(212,175,55,1)]" />
+                    </div>
+                </div>
+                <div className="relative w-full h-[100dvh] sm:h-[95vh] md:h-[90vh] flex flex-col items-center forged-iron sm:rounded-xl z-10 border-0 sm:border-4 border-[#1a1a1a]">
+                    <div className="w-full h-16 sm:h-24 wood-panel flex items-center justify-between px-3 sm:px-6 md:px-10 z-30 relative sm:rounded-t-xl">
+                        <div className="flex-1 flex items-center hidden sm:flex">
+                            {view === 'lobby' ? ( <div className="flex items-center gap-2 sm:gap-3 bg-black/60 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full border border-red-900/50 shadow-inner"><div className="w-2 h-2 sm:w-3 sm:h-3 rounded-full bg-red-600 animate-pulse"></div><span className="font-cinzel text-[10px] sm:text-xs text-red-500 tracking-[0.2em] sm:tracking-[0.3em] uppercase font-bold hidden md:block">In Chamber</span></div> ) : ( <div className="flex items-center gap-2 sm:gap-3 bg-black/60 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full border border-yellow-900/50 shadow-inner"><div className="w-2 h-2 sm:w-3 sm:h-3 rounded-full bg-yellow-600 animate-pulse"></div><span className="font-cinzel text-[10px] sm:text-xs text-yellow-500 tracking-[0.2em] sm:tracking-[0.3em] uppercase font-bold hidden md:block">{lang==='bg' ? 'Картотека' : 'Archives'}</span></div> )}
+                        </div>
+                        <div className="flex-1 flex flex-col items-center justify-center text-center relative z-10 mx-2">
+                            <h1 className="font-medieval text-3xl sm:text-5xl md:text-6xl lg:text-7xl text-transparent bg-clip-text bg-gradient-to-b from-yellow-200 via-yellow-500 to-[#8b6508] tracking-[0.1em] sm:tracking-[0.25em] leading-none mb-0 sm:mb-1 cursor-default whitespace-nowrap">{t.title}</h1>
+                            <div className="flex items-center gap-4 w-full justify-center hidden md:flex"><div className="h-px w-20 bg-gradient-to-r from-transparent via-yellow-600 to-transparent"></div><span className="font-cinzel text-[10px] text-yellow-400 font-bold tracking-widest uppercase whitespace-nowrap">{t.subtitle}</span><div className="h-px w-20 bg-gradient-to-r from-transparent via-yellow-600 to-transparent"></div></div>
+                        </div>
+                        <div className="flex-1 flex items-center justify-end gap-2 sm:gap-4 md:gap-6">
+                            <button onClick={() => { playSound('click'); setLang(l => l === 'bg' ? 'en' : 'bg') }} className="px-2 sm:px-4 py-1.5 sm:py-2 border-2 border-yellow-800 bg-[#111] text-yellow-500 font-bold hover:bg-yellow-900 transition-all text-[10px] sm:text-xs tracking-[0.1em] sm:tracking-[0.2em] rounded shadow-[0_4px_10px_rgba(0,0,0,0.8)]">{lang.toUpperCase()}</button>
+                            <div className="relative" ref={dropdownRef}>
+                                <button onClick={() => { playSound('click'); setIsSettingsOpen(!isSettingsOpen); }} className={`w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center rounded transition-all shadow-[0_4px_10px_rgba(0,0,0,0.8)] ${isSettingsOpen ? 'bg-yellow-800 border-2 border-yellow-500 text-yellow-100' : 'bg-[#111] border-2 border-yellow-800 text-yellow-600 hover:text-yellow-300 hover:bg-yellow-900/50'}`}><div className="w-4 h-4 sm:w-5 sm:h-5"><Icons.SettingsGear /></div></button>
+                                {isSettingsOpen && (
+                                    <div className="absolute right-0 top-10 sm:top-14 w-56 sm:w-64 forged-iron rounded-lg p-4 sm:p-5 animate-fade-in-up z-50">
+                                        <h4 className="font-cinzel text-yellow-600 text-xs sm:text-sm font-bold tracking-widest border-b-2 border-[#333] pb-2 sm:pb-3 mb-4 sm:mb-5 uppercase text-center">{t.settings.title}</h4>
+                                        <label className="flex items-center gap-4 cursor-pointer mb-4 hover:bg-[#111] p-2 rounded transition-colors"><input type="checkbox" checked={!settings.mute} onChange={() => { playSound('click'); setSettings(s => ({...s, mute: !s.mute})) }} className="w-5 h-5 accent-yellow-700" /><span className="font-serif text-yellow-100 text-base">{t.settings.sound}</span></label>
+                                        <label className="flex items-center gap-4 cursor-pointer hover:bg-[#111] p-2 rounded transition-colors"><input type="checkbox" checked={settings.fx} onChange={() => { playSound('click'); setSettings(s => ({...s, fx: !s.fx})) }} className="w-5 h-5 accent-yellow-700" /><span className="font-serif text-yellow-100 text-base">{t.settings.fx}</span></label>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex-1 w-full overflow-y-auto custom-scroll relative p-4 sm:p-6 md:p-10 lg:p-14 z-20 overflow-x-hidden">
+                        <CornerDecoration />
+                        <div key={view} className="animate-scroll-unroll w-full h-full transform-origin-top">
+                            {view === 'menu' && <GameMenu onCreateRoom={handleCreateRoom} onJoinRoom={handleJoinRoom} />}
+                            {view === 'lobby' && <LobbyRoom roomCode={roomCode} onLeave={() => changeView('menu')} onOpenArmory={() => setIsArmoryOpen(true)} />}
+                        </div>
+                    </div>
+                    <div className="w-full h-14 sm:h-16 wood-panel border-t-4 border-[#0a0502] flex items-center justify-between px-3 sm:px-6 md:px-10 z-30 relative sm:rounded-b-xl">
+                        <button onClick={handleLogout} className="text-[10px] sm:text-[11px] font-cinzel text-red-500 hover:text-red-300 font-bold uppercase tracking-[0.1em] sm:tracking-widest transition-colors rounded px-2 sm:px-3 py-1.5 sm:py-2 bg-[#111] border border-red-900/50">{t.lobby.logout}</button>
+                        <div className="flex items-center gap-3">
+                            <button onClick={() => { playSound('click'); setIsArmoryOpen(true); }} className="flex items-center gap-2 sm:gap-3 bg-[#111] hover:bg-[#1a1a1a] pl-3 sm:pl-4 pr-1 sm:pr-2 py-1 sm:py-1.5 rounded-full border-2 border-[#333] hover:border-yellow-700 transition-all group shadow-[0_5px_15px_rgba(0,0,0,0.8)]">
+                                <div className="w-2 h-2 sm:w-3 sm:h-3 rounded-full bg-green-500 animate-pulse"></div>
+                                <span className="text-[10px] sm:text-xs font-cinzel font-bold text-yellow-500 uppercase tracking-widest truncate max-w-[80px] sm:max-w-[120px] md:max-w-none group-hover:text-yellow-300 transition-colors">{profile.name}</span>
+                                <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full ml-1 sm:ml-2 border-[2px] sm:border-[3px] border-[#222] group-hover:border-yellow-500 overflow-hidden flex items-center justify-center transition-colors shadow-inner" style={{ backgroundColor: profile.color }}><img src={profile.avatar} alt="avatar" className="scale-[1.3] translate-y-1 drop-shadow-md" /></div>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <ArmoryModal isOpen={isArmoryOpen} onClose={() => setIsArmoryOpen(false)} roomCode={roomCode} />
+            </div>
+        );
+    };
+
+    const App = () => {
+        const [lang, setLang] = useState('en'); const [user, setUser] = useState(null); const [loading, setLoading] = useState(true); const [settings, setSettings] = useState({ mute: false, fx: true }); const [profile, setProfile] = useState(null); const [showWelcome, setShowWelcome] = useState(false);
+
+        useEffect(() => {
+            supabase.auth.getSession().then(({ data: { session } }) => { setUser(session?.user || null); setLoading(false); });
+            const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => { setUser(session?.user || null); });
+            return () => subscription.unsubscribe();
+        }, []);
+
+        useEffect(() => { const hash = window.location.hash; if (hash && hash.includes('type=signup')) { setShowWelcome(true); setTimeout(() => { playSound('horn'); }, 300); window.history.replaceState(null, null, window.location.pathname); } }, []);
+
+        useEffect(() => {
+            if (user && !profile) {
+                const seed = user.id || 'Knight'; const traits = { skinColor: 'f2d3b1', hair: 'short01', hairColor: '000000', eyes: 'variant01', mouth: 'variant01' };
+                setProfile({ name: user.user_metadata?.display_name || (user.is_anonymous ? "Guest Knight" : "Wandering Hero"), seed: seed, traits: traits, avatar: `https://api.dicebear.com/7.x/adventurer/svg?seed=${seed}&backgroundColor=transparent&skinColor=${traits.skinColor}&hair=${traits.hair}&hairColor=${traits.hairColor}&eyes=${traits.eyes}&mouth=${traits.mouth}`, color: '#2c3e50' });
+            }
+        }, [user, profile]);
+
+        const playSound = (type) => {
+            if (settings.mute) return;
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext; if (!AudioContext) return; const ctx = new AudioContext(); const osc = ctx.createOscillator(); const gain = ctx.createGain(); osc.connect(gain); gain.connect(ctx.destination);
+                if (type === 'click') { osc.type = 'sine'; osc.frequency.setValueAtTime(600, ctx.currentTime); osc.frequency.exponentialRampToValueAtTime(300, ctx.currentTime + 0.1); gain.gain.setValueAtTime(0.1, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1); osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.1); }
+                else if (type === 'sword') { osc.type = 'sawtooth'; osc.frequency.setValueAtTime(800, ctx.currentTime); osc.frequency.exponentialRampToValueAtTime(100, ctx.currentTime + 0.3); gain.gain.setValueAtTime(0.2, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3); const osc2 = ctx.createOscillator(); osc2.type = 'square'; osc2.frequency.setValueAtTime(1200, ctx.currentTime); osc2.frequency.exponentialRampToValueAtTime(200, ctx.currentTime + 0.2); osc2.connect(gain); osc2.start(ctx.currentTime); osc2.stop(ctx.currentTime + 0.2); osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.3); }
+                else if (type === 'horn') { osc.type = 'sawtooth'; osc.frequency.setValueAtTime(300, ctx.currentTime); gain.gain.setValueAtTime(0, ctx.currentTime); gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.1); gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.8); const osc2 = ctx.createOscillator(); const gain2 = ctx.createGain(); osc2.type = 'sawtooth'; osc2.frequency.setValueAtTime(450, ctx.currentTime); gain2.gain.setValueAtTime(0, ctx.currentTime); gain2.gain.linearRampToValueAtTime(0.15, ctx.currentTime + 0.1); gain2.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.8); osc2.connect(gain2); gain2.connect(ctx.destination); osc2.start(ctx.currentTime); osc2.stop(ctx.currentTime + 0.8); osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.8); }
+            } catch(e) { console.error("Audio Engine Error", e); }
+        };
+
+        if (loading) return (
+            <div className="h-[100dvh] w-screen flex flex-col items-center justify-center bg-[#050505] text-[#ecd08c] font-cinzel text-xl gap-8 relative overflow-hidden">
+                {settings.fx && <EmbersCanvas />}
+                <div className="relative w-32 h-32 animate-[pulse_2s_ease-in-out_infinite] z-10 flex items-center justify-center"><div className="absolute inset-0 border-[6px] border-dashed border-yellow-600/40 rounded-full animate-spin-slow shadow-[0_0_30px_rgba(212,175,55,0.2)]"></div><Icons.Swords className="w-16 h-16 text-yellow-500 drop-shadow-[0_0_20px_rgba(212,175,55,1)]" /></div>
+                <div className="animate-pulse tracking-[0.2em] text-2xl drop-shadow-[0_0_10px_rgba(236,208,140,0.8)] z-10 text-center flex flex-col items-center gap-3"><span className="font-bold">Forging Connections</span><div className="w-40 h-[2px] bg-gradient-to-r from-transparent via-yellow-500 to-transparent"></div></div>
+            </div>
+        );
+
+        const contextValue = { lang, setLang, t: translations[lang], user, profile, setProfile, settings, setSettings, playSound };
+
+        return (
+            <GameContext.Provider value={contextValue}>
+                <ToastContainer />
+                {!user || !profile ? <AuthScreen /> : (
+                    <>
+                        {settings.fx && <EmbersCanvas />}
+                        <GameInterface />
+                        <WelcomeModal isOpen={showWelcome} onClose={() => { playSound('click'); setShowWelcome(false); }} />
+                    </>
+                )}
+            </GameContext.Provider>
+        );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+</script>
+</body>
+</html>
