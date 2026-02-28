@@ -2470,6 +2470,7 @@
             if (state.showAssetInspector) html += renderAssetInspector(theme);
         } else if (state.phase === 'lobby') {
             html = renderLobbyScreen(theme);
+            if (state.showSkinEditor) html += renderSkinEditor(theme);
         } else if (state.phase === 'victory') {
             html = renderVictoryScreen(theme);
         } else if (state.phase === 'gameover') {
