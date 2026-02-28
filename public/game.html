@@ -3066,7 +3066,7 @@
     };
 
     function exitMapSimulation() {
-        state.phase = 'start';
+        state.phase = state.isMultiplayer ? 'lobby' : 'start';
         if (controls) controls.autoRotate = false;
         renderUI();
     }
