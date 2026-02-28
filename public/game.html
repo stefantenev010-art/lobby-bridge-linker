@@ -36,8 +36,8 @@
                 state.isHost = isHost;
                 state.phase = 'lobby';
 
-                // Generate ID
-                this.myId = Math.random().toString(36).substr(2, 9);
+                // Use existing ID from launch data if available, otherwise generate
+                this.myId = state.myId || Math.random().toString(36).substr(2, 9);
                 state.myId = this.myId;
 
                 if (isHost) {
@@ -2470,6 +2470,7 @@
             if (state.showAssetInspector) html += renderAssetInspector(theme);
         } else if (state.phase === 'lobby') {
             html = renderLobbyScreen(theme);
+            if (state.showSkinEditor) html += renderSkinEditor(theme);
         } else if (state.phase === 'victory') {
             html = renderVictoryScreen(theme);
         } else if (state.phase === 'gameover') {
@@ -2810,9 +2811,22 @@
     };
 
     function renderLobbyScreen(theme) {
+        const cfg = state.terrainConfig;
+        const Slider = (label, key, min, max, step) => `
+            <div class="space-y-1">
+                <div class="flex justify-between text-[10px] font-bold opacity-60 uppercase tracking-wider text-amber-500">
+                    <span>${label}</span>
+                    <span class="text-amber-200">${cfg[key]}</span>
+                </div>
+                <input type="range" min="${min}" max="${max}" step="${step}" value="${cfg[key]}"
+                    oninput="window.updateTerrainParam('${key}', this.value)"
+                    class="w-full h-1 bg-amber-900/30 appearance-none cursor-pointer accent-amber-600">
+            </div>
+        `;
+
         return `
-                    <div class="fixed inset-0 w-full h-full ${theme.bgClass} ${theme.textClass} flex flex-col items-center justify-center p-4 font-serif pointer-events-auto overflow-y-auto">
-                        <div class="${theme.uiBg} p-8 shadow-[0_0_50px_rgba(0,0,0,0.8)] w-full max-w-xl text-center border-4 border-double ${theme.uiBorder} relative overflow-hidden">
+                    <div class="fixed inset-0 w-full h-full ${theme.bgClass} ${theme.textClass} flex flex-col items-center p-4 font-serif pointer-events-auto overflow-y-auto">
+                        <div class="${theme.uiBg} p-8 shadow-[0_0_50px_rgba(0,0,0,0.8)] w-full max-w-xl text-center border-4 border-double ${theme.uiBorder} relative overflow-hidden my-8">
 
                             <h2 class="text-4xl font-black mb-1 mt-4 tracking-tight text-amber-500 drop-shadow-md">ТАВЕРНА</h2>
                             <p class="text-sm font-medium text-amber-700 mb-8 uppercase tracking-widest">Очакване на пълководци</p>
@@ -2832,7 +2846,7 @@
                                 <span class="flex h-2 w-2 rounded-full bg-amber-500 animate-pulse shadow-[0_0_10px_rgba(245,158,11,0.8)]"></span>
                             </div>
 
-                            <div class="space-y-3 mb-10 text-left overflow-y-auto max-h-[300px] pr-2 custom-scrollbar">
+                            <div class="space-y-3 mb-8 text-left overflow-y-auto max-h-[300px] pr-2 custom-scrollbar">
                                 ${(state.playersPending.length > 0 ? state.playersPending : [{ id: state.myId, name: 'ТИ (Хост)', color: state.playerColor || '#f59e0b', isHost: true }]).map(p => `
                             <div class="flex items-center gap-4 p-4 bg-stone-900/80 border border-amber-900/40 shadow-sm transition-all hover:translate-x-1">
                                 ${p.id === state.myId ? `
@@ -2872,6 +2886,74 @@
                             </div>
                         `).join('')}
                             </div>
+
+                            <!-- Game Options Section (Host only) -->
+                            ${state.isHost ? `
+                            <div class="bg-stone-950/50 p-6 border-2 border-amber-900/50 mb-6 shadow-inner text-left">
+                                <h3 class="text-sm font-black uppercase tracking-[0.2em] text-amber-500 mb-5 flex items-center gap-2">
+                                    <i data-lucide="ruler" class="w-4 h-4 text-amber-700"></i>
+                                    Граници на Света
+                                </h3>
+                                <div class="space-y-4">
+                                    <div class="bg-stone-900 p-3 border border-amber-900/50 shadow-inner">
+                                        <div class="flex justify-between text-xs font-bold text-amber-600 mb-2 uppercase tracking-wide">
+                                            <span>Ширина (Колони)</span>
+                                            <span class="text-amber-400 text-lg">${state.gridCols || 20}</span>
+                                        </div>
+                                        <input type="range" min="10" max="40" step="2" value="${state.gridCols || 20}"
+                                            oninput="state.gridCols = parseInt(this.value); renderUI();"
+                                            class="w-full h-2 bg-stone-950 border border-amber-900/50 appearance-none cursor-pointer accent-amber-600">
+                                    </div>
+                                    <div class="bg-stone-900 p-3 border border-amber-900/50 shadow-inner">
+                                        <div class="flex justify-between text-xs font-bold text-amber-600 mb-2 uppercase tracking-wide">
+                                            <span>Височина (Редове)</span>
+                                            <span class="text-amber-400 text-lg">${state.gridRows || 20}</span>
+                                        </div>
+                                        <input type="range" min="10" max="40" step="2" value="${state.gridRows || 20}"
+                                            oninput="state.gridRows = parseInt(this.value); renderUI();"
+                                            class="w-full h-2 bg-stone-950 border border-amber-900/50 appearance-none cursor-pointer accent-amber-600">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="bg-stone-950/50 p-6 border-2 border-amber-900/50 mb-6 shadow-inner text-left">
+                                <details>
+                                    <summary class="text-sm font-black uppercase tracking-[0.2em] text-amber-500 cursor-pointer flex items-center gap-2">
+                                        <i data-lucide="mountain" class="w-4 h-4 text-amber-700"></i>
+                                        Терен (Разширени настройки)
+                                    </summary>
+                                    <div class="mt-4 space-y-5">
+                                        <div class="space-y-3">
+                                            <h4 class="text-[10px] font-black text-amber-500 uppercase tracking-widest border-b border-amber-900/30 pb-1">Земи</h4>
+                                            ${Slider('Височина на земята', 'islandHeight', 1, 15, 0.5)}
+                                            ${Slider('Основа на острова', 'islandBaseHeight', 1, 10, 0.5)}
+                                            ${Slider('Радиус на острова', 'islandRadius', 0.2, 1.2, 0.05)}
+                                            ${Slider('Наклон (Скали)', 'islandFalloff', 0.1, 2.0, 0.1)}
+                                        </div>
+                                        <div class="space-y-3">
+                                            <h4 class="text-[10px] font-black text-blue-400 uppercase tracking-widest border-b border-amber-900/30 pb-1">Морета</h4>
+                                            ${Slider('Дълбочина на океана', 'seabedHeight', -30, -2, 1)}
+                                            ${Slider('Ниво на водата', 'waterHeight', -1, 5, 0.1)}
+                                            ${Slider('Прозрачност', 'waterOpacity', 0.1, 1.0, 0.05)}
+                                            ${Slider('Вълнение', 'waveAmplitude', 0, 1, 0.05)}
+                                            ${Slider('Скорост на течението', 'waveSpeed', 0, 5, 0.1)}
+                                        </div>
+                                        <div class="space-y-3">
+                                            <h4 class="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-amber-900/30 pb-1">Далечни Планини</h4>
+                                            ${Slider('Височина на планини', 'mountainHeight', 0, 200, 5)}
+                                            ${Slider('Отстояние', 'mountainThreshold', 1000, 10000, 500)}
+                                            ${Slider('Стръмност', 'mountainScale', 0.01, 1.0, 0.01)}
+                                            ${Slider('Неравност', 'mountainNoiseScale', 0.001, 0.02, 0.001)}
+                                        </div>
+                                    </div>
+                                </details>
+                            </div>
+
+                            <div class="flex justify-center gap-3 mb-6">
+                                <button onclick="state.showSkinEditor=true; renderUI()" class="px-4 py-2.5 bg-stone-800 hover:bg-stone-700 border border-amber-900 text-amber-200 font-bold flex items-center gap-2 shadow-lg hover:scale-105 transition-transform text-sm"><i data-lucide="hammer" class="w-4 h-4"></i> Ковачница</button>
+                                <button onclick="enterMapSimulation()" class="px-4 py-2.5 bg-stone-800 hover:bg-stone-700 border border-amber-900 text-amber-200 font-bold flex items-center gap-2 shadow-lg hover:scale-105 transition-transform text-sm"><i data-lucide="map" class="w-4 h-4"></i> Карта</button>
+                            </div>
+                            ` : ''}
 
                             ${state.isHost ? `
                         <button onclick="event.stopPropagation(); startGameMultiplayer()" class="w-full py-5 ${theme.btnPrimary} font-black text-lg shadow-[0_0_20px_rgba(180,83,9,0.3)] hover:scale-[1.02] active:scale-[0.98] transition-all uppercase tracking-widest">
@@ -2984,7 +3066,7 @@
     };
 
     function exitMapSimulation() {
-        state.phase = 'start';
+        state.phase = state.isMultiplayer ? 'lobby' : 'start';
         if (controls) controls.autoRotate = false;
         renderUI();
     }
