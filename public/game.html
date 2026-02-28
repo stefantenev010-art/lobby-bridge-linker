@@ -3562,6 +3562,38 @@
 
     window.onload = () => {
         init();
+
+        // Check if launched from lobby
+        const launchDataStr = localStorage.getItem('krusader-launch-data');
+        if (launchDataStr) {
+            try {
+                const launchData = JSON.parse(launchDataStr);
+                // Only use if recent (within 60 seconds)
+                if (Date.now() - launchData.timestamp < 60000) {
+                    // Clear it so it doesn't re-trigger on refresh
+                    localStorage.removeItem('krusader-launch-data');
+
+                    // Hydrate game state from lobby data
+                    state.isMultiplayer = true;
+                    state.isHost = launchData.isHost;
+                    state.roomCode = launchData.roomCode;
+                    state.myId = launchData.myId;
+                    state.playerName = launchData.playerName;
+                    state.playerColor = launchData.playerColor;
+                    state.playersPending = launchData.playersPending;
+
+                    if (launchData.questions) {
+                        state.questions = launchData.questions;
+                    }
+
+                    // Connect to the socket room
+                    network.init(launchData.isHost, launchData.roomCode);
+                }
+            } catch (e) {
+                console.error('Failed to parse launch data:', e);
+                localStorage.removeItem('krusader-launch-data');
+            }
+        }
     };
 </script>
 </body>
