@@ -891,8 +891,8 @@
     const useGame = () => useContext(GameContext);
 
     // --- INITIALIZE SUPABASE WITH COOKIE STORAGE ---
-    const supabaseUrl = 'https://pgdouacnmevckpsfcbvt.supabase.co';
-    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBnZG91YWNubWV2Y2twc2ZjYnZ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE2NzEwNDksImV4cCI6MjA4NzI0NzA0OX0.tx4bjDzG2kti_MkZyrsJU9rz4BzDCl0uTlVoSnNH8oM';
+    const supabaseUrl = 'https://vsujvunidcaocgdhgfsx.supabase.co';
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzdWp2dW5pZGNhb2NnZGhnZnN4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwNTU2MDIsImV4cCI6MjA4ODYzMTYwMn0.K-okPZk0LznYjjdq2JnZwBIwz2kk6PqiRd6CDG6sGTM';
     
     // 1. Create a custom storage adapter that uses document.cookie
     const cookieStorage = {
@@ -1227,11 +1227,11 @@
         const handleAuth = async (action) => {
             playSound('click'); setLoading(true);
             try {
-                if (action === 'guest') {
-                    const { error } = await supabase.auth.signInAnonymously();
-                    if (error) throw error; ToastManager.show("Entering in shadows...");
-                } else if (action === 'google') {
-                    const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+                if (action === 'google') {
+                    const { error } = await supabase.auth.signInWithOAuth({ 
+                        provider: 'google',
+                        options: { redirectTo: window.location.origin + '/lobby.html' }
+                    });
                     if (error) throw error;
                 } else if (action === 'login') {
                     if(!email || !pass) throw new Error("Credentials required!");
@@ -1278,7 +1278,6 @@
                         <button onClick={() => handleAuth(view)} disabled={loading} className="w-full p-4 mt-2 auth-btn auth-btn-primary text-white font-bold tracking-[2px] uppercase rounded">{loading ? "..." : (view === 'login' ? t.auth.enter : t.auth.forge)}</button>
                         <div className="flex items-center text-center text-[#ecd08c] my-6 text-xs font-bold opacity-60 auth-divider"><span className="px-3 drop-shadow-md">{t.auth.or}</span></div>
                         <button onClick={() => handleAuth('google')} disabled={loading} className="w-full p-4 mt-2 auth-btn bg-black/40 border border-[#ecd08c]/40 text-white/90 font-bold tracking-[1.5px] uppercase rounded"><span className="inline-block align-middle mr-2">⚔</span> {t.auth.google}</button>
-                        <button onClick={() => handleAuth('guest')} disabled={loading} className="w-full p-4 mt-3 auth-btn bg-black/40 border border-[#ecd08c]/40 text-white/90 font-bold tracking-[1.5px] uppercase rounded">{t.auth.guest}</button>
                         <div className="text-center mt-8 text-[15px] text-white/80 bg-black/50 p-3 rounded-b-lg -mx-8 -mb-8 border-t border-yellow-900/50">
                             {view === 'login' ? t.auth.notSworn : t.auth.sworn}
                             <button onClick={() => { playSound('click'); setView(view === 'login' ? 'register' : 'login') }} className="auth-link font-bold ml-1 focus-visible:outline-none focus-visible:text-white text-[#ecd08c]">
