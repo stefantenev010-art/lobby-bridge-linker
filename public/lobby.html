@@ -1228,11 +1228,61 @@
             playSound('click'); setLoading(true);
             try {
                 if (action === 'google') {
-                    const { error } = await supabase.auth.signInWithOAuth({ 
-                        provider: 'google',
-                        options: { redirectTo: window.location.origin + '/lobby.html' }
+                    // Use Lovable Cloud managed OAuth flow
+                    const OAUTH_BROKER_URL = '/~oauth/initiate';
+                    const SUPPORTED_ORIGINS = ['https://oauth.lovable.app'];
+                    
+                    let isInIframe = false;
+                    try { isInIframe = window.self !== window.top; } catch { isInIframe = true; }
+                    
+                    const oauthState = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
+                    const redirectUri = window.location.origin;
+                    const params = new URLSearchParams({ provider: 'google', redirect_uri: redirectUri, state: oauthState });
+                    
+                    if (!isInIframe) {
+                        // Direct redirect flow (not in iframe)
+                        window.location.href = `${OAUTH_BROKER_URL}?${params.toString()}`;
+                        return;
+                    }
+                    
+                    // Iframe popup flow
+                    params.set('response_mode', 'web_message');
+                    const url = `${OAUTH_BROKER_URL}?${params.toString()}`;
+                    
+                    // Set up message listener
+                    let resolveMsg;
+                    const msgPromise = new Promise(resolve => { resolveMsg = resolve; });
+                    const msgHandler = (e) => {
+                        if (!SUPPORTED_ORIGINS.some(o => e.origin === o)) return;
+                        if (!e.data || typeof e.data !== 'object' || e.data.type !== 'authorization_response') return;
+                        resolveMsg(e.data.response);
+                    };
+                    window.addEventListener('message', msgHandler);
+                    
+                    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+                    let popup;
+                    if (isMobile) {
+                        popup = window.open(url, '_blank');
+                    } else {
+                        const w = window.outerWidth * 0.5, h = window.outerHeight * 0.5;
+                        const l = window.screenX + (window.outerWidth - w) / 2, t = window.screenY + (window.outerHeight - h) / 2;
+                        popup = window.open(url, 'oauth', `width=${w},height=${h},left=${l},top=${t}`);
+                    }
+                    
+                    if (!popup) { window.removeEventListener('message', msgHandler); throw new Error('Popup blocked! Please allow popups.'); }
+                    
+                    const popupClosed = new Promise((_, reject) => {
+                        const iv = setInterval(() => { if (popup.closed) { clearInterval(iv); reject(new Error('Sign in was cancelled')); } }, 500);
                     });
-                    if (error) throw error;
+                    
+                    try {
+                        const data = await Promise.race([msgPromise, popupClosed]);
+                        if (data.error) throw new Error(data.error === 'legacy_flow' ? 'Open app in a new tab to sign in.' : (data.error_description || 'Sign in failed'));
+                        if (data.state !== oauthState) throw new Error('Invalid state');
+                        if (!data.access_token || !data.refresh_token) throw new Error('No tokens received');
+                        await supabase.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token });
+                        ToastManager.show('Google sign-in successful!');
+                    } finally { window.removeEventListener('message', msgHandler); popup?.close(); }
                 } else if (action === 'login') {
                     if(!email || !pass) throw new Error("Credentials required!");
                     const { error } = await supabase.auth.signInWithPassword({ email, password: pass });
