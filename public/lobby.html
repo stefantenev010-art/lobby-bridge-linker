@@ -1231,11 +1231,11 @@
                     const { error } = await supabase.auth.signInAnonymously();
                     if (error) throw error; ToastManager.show("Entering in shadows...");
                 } else if (action === 'google') {
-                    // Use Lovable Cloud managed Google OAuth
-                    const redirectUri = window.location.origin + '/lobby.html';
-                    const authUrl = `https://wpczgwxsriezaubncuom.lovable.app/auth?provider=google&redirect_uri=${encodeURIComponent(redirectUri)}`;
-                    window.location.href = authUrl;
-                    return;
+                    const { error } = await supabase.auth.signInWithOAuth({ 
+                        provider: 'google',
+                        options: { redirectTo: window.location.origin + '/lobby.html' }
+                    });
+                    if (error) throw error;
                 } else if (action === 'login') {
                     if(!email || !pass) throw new Error("Credentials required!");
                     const { error } = await supabase.auth.signInWithPassword({ email, password: pass });
