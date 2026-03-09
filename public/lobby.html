@@ -1227,10 +1227,7 @@
         const handleAuth = async (action) => {
             playSound('click'); setLoading(true);
             try {
-                if (action === 'guest') {
-                    const { error } = await supabase.auth.signInAnonymously();
-                    if (error) throw error; ToastManager.show("Entering in shadows...");
-                } else if (action === 'google') {
+                if (action === 'google') {
                     const { error } = await supabase.auth.signInWithOAuth({ 
                         provider: 'google',
                         options: { redirectTo: window.location.origin + '/lobby.html' }
